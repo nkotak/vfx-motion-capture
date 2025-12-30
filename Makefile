@@ -16,7 +16,6 @@ help:
 	@echo "  make frontend       Start frontend server"
 	@echo "  make worker         Start Celery worker"
 	@echo "  make redis          Start Redis server"
-	@echo "  make comfyui        Start ComfyUI"
 	@echo ""
 	@echo "Docker:"
 	@echo "  make docker-build   Build Docker images"
@@ -65,10 +64,6 @@ worker:
 redis:
 	@echo "Starting Redis..."
 	docker run --rm -p 6379:6379 redis:7-alpine
-
-comfyui:
-	@echo "Starting ComfyUI..."
-	cd comfyui && docker-compose up
 
 # Docker commands
 docker-build:

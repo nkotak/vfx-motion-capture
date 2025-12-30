@@ -134,19 +134,19 @@ app.mount("/outputs", StaticFiles(directory=str(settings.output_dir)), name="out
 @app.get("/health", tags=["Health"])
 async def health_check():
     """Health check endpoint."""
-    from backend.services.comfyui_client import get_comfyui_client
-
-    comfyui_status = "unknown"
+    from backend.services.model_manager import get_model_manager
+    
+    # Simple check if model manager is initialized
+    model_manager_status = "active"
     try:
-        client = get_comfyui_client()
-        comfyui_status = "connected" if await client.health_check() else "disconnected"
+        get_model_manager()
     except Exception as e:
-        comfyui_status = f"error: {str(e)}"
+        model_manager_status = f"error: {str(e)}"
 
     return {
         "status": "healthy",
         "version": settings.app_version,
-        "comfyui": comfyui_status,
+        "inference_engine": model_manager_status,
     }
 
 

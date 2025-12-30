@@ -71,29 +71,6 @@ class ModelNotLoadedError(VFXException):
         )
 
 
-class ComfyUIConnectionError(VFXException):
-    """Failed to connect to ComfyUI backend."""
-
-    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
-        super().__init__(
-            message=message,
-            code="COMFYUI_CONNECTION_ERROR",
-            details=details
-        )
-
-
-class ComfyUIExecutionError(VFXException):
-    """Error during ComfyUI workflow execution."""
-
-    def __init__(self, message: str, node_id: Optional[str] = None, details: Optional[Dict[str, Any]] = None):
-        extra_details = {"node_id": node_id} if node_id else {}
-        super().__init__(
-            message=message,
-            code="COMFYUI_EXECUTION_ERROR",
-            details={**extra_details, **(details or {})}
-        )
-
-
 class InvalidInputError(VFXException):
     """Invalid input parameters."""
 

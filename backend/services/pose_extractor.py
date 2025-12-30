@@ -83,6 +83,15 @@ class PoseExtractor:
         """
         self.backend = backend.lower()
         self.device = device or settings.device
+        if self.device == "auto":
+            import torch
+            if torch.cuda.is_available():
+                self.device = "cuda"
+            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                self.device = "mps"
+            else:
+                self.device = "cpu"
+
         self.model_complexity = model_complexity
         self._model = None
         self._initialized = False

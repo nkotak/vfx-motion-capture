@@ -87,6 +87,15 @@ class FaceDetector:
         """
         self.detection_threshold = detection_threshold
         self.device = device or settings.device
+        if self.device == "auto":
+            import torch
+            if torch.cuda.is_available():
+                self.device = "cuda"
+            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                self.device = "mps"
+            else:
+                self.device = "cpu"
+
         self.det_model = det_model
         self._model = None
         self._swapper = None
@@ -104,6 +113,9 @@ class FaceDetector:
             # Determine providers based on device
             if self.device == "cuda":
                 providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            elif self.device == "mps":
+                # CoreML provider might not be available in all builds, fallback to CPU if needed
+                providers = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
             else:
                 providers = ["CPUExecutionProvider"]
 

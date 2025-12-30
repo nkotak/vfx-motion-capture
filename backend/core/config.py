@@ -53,22 +53,6 @@ class Settings(BaseSettings):
                 return base / "temp"
         return Path(v) if isinstance(v, str) else v
 
-    # ComfyUI
-    comfyui_host: str = "localhost"
-    comfyui_port: int = 8188
-    comfyui_use_ssl: bool = False
-    comfyui_timeout: int = 600  # 10 minutes for long generations
-
-    @property
-    def comfyui_url(self) -> str:
-        protocol = "https" if self.comfyui_use_ssl else "http"
-        return f"{protocol}://{self.comfyui_host}:{self.comfyui_port}"
-
-    @property
-    def comfyui_ws_url(self) -> str:
-        protocol = "wss" if self.comfyui_use_ssl else "ws"
-        return f"{protocol}://{self.comfyui_host}:{self.comfyui_port}/ws"
-
     # Redis / Celery
     redis_host: str = "localhost"
     redis_port: int = 6379
@@ -112,7 +96,7 @@ class Settings(BaseSettings):
     realtime_max_latency_ms: int = 100
 
     # Hardware
-    device: str = "cuda"  # cuda, cpu, mps
+    device: str = "auto"  # auto, cuda, cpu, mps
     gpu_memory_fraction: float = 0.9
     enable_fp16: bool = True
     enable_xformers: bool = True

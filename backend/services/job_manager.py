@@ -388,7 +388,7 @@ class JobManager:
             try:
                 self._callbacks[job_id].remove(callback)
             except ValueError:
-                pass
+                logger.debug(f"Callback not found for job {job_id}")
 
     async def _notify_progress(self, job: Job) -> None:
         """Notify all registered callbacks of progress update."""

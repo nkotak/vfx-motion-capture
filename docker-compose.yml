@@ -25,8 +25,6 @@ services:
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - COMFYUI_HOST=comfyui
-      - COMFYUI_PORT=8188
       - DATABASE_URL=sqlite+aiosqlite:///./data/vfx_motion_capture.db
     volumes:
       - ./uploads:/app/uploads
@@ -35,14 +33,14 @@ services:
       - backend-data:/app/data
     depends_on:
       - redis
-      - comfyui
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+    # GPU support (uncomment for Linux/NVIDIA)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
     networks:
       - vfx-network
 
@@ -55,22 +53,20 @@ services:
     environment:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - COMFYUI_HOST=comfyui
-      - COMFYUI_PORT=8188
     volumes:
       - ./uploads:/app/uploads
       - ./outputs:/app/outputs
       - ./models:/app/models
     depends_on:
       - redis
-      - comfyui
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+    # GPU support (uncomment for Linux/NVIDIA)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
     networks:
       - vfx-network
 
@@ -84,33 +80,9 @@ services:
     networks:
       - vfx-network
 
-  # ComfyUI
-  comfyui:
-    image: ghcr.io/ai-dock/comfyui:latest
-    ports:
-      - "8188:8188"
-    environment:
-      - CLI_ARGS=--listen 0.0.0.0 --port 8188
-    volumes:
-      - ./models:/workspace/ComfyUI/models
-      - ./comfyui/custom_nodes:/workspace/ComfyUI/custom_nodes
-      - comfyui-output:/workspace/ComfyUI/output
-      - comfyui-input:/workspace/ComfyUI/input
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    networks:
-      - vfx-network
-
 volumes:
   redis-data:
   backend-data:
-  comfyui-output:
-  comfyui-input:
 
 networks:
   vfx-network:

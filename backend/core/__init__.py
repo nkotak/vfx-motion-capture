@@ -12,7 +12,6 @@ from .exceptions import (
     VFXException,
     VideoProcessingError,
     ModelNotLoadedError,
-    ComfyUIConnectionError,
     InvalidInputError,
 )
 
@@ -27,6 +26,5 @@ __all__ = [
     "VFXException",
     "VideoProcessingError",
     "ModelNotLoadedError",
-    "ComfyUIConnectionError",
     "InvalidInputError",
 ]
