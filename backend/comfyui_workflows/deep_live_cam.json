@@ -1,0 +1,76 @@
+{
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "source_face"
+    },
+    "_meta": {
+      "title": "Load Source Face"
+    }
+  },
+  "2": {
+    "class_type": "VHS_LoadVideo",
+    "inputs": {
+      "video": "target_video",
+      "force_rate": 0,
+      "force_size": "Disabled",
+      "custom_width": 1280,
+      "custom_height": 720,
+      "frame_load_cap": 0,
+      "skip_first_frames": 0,
+      "select_every_nth": 1
+    },
+    "_meta": {
+      "title": "Load Target Video"
+    }
+  },
+  "3": {
+    "class_type": "ReActorFaceSwap",
+    "inputs": {
+      "source_image": ["1", 0],
+      "input_images": ["2", 0],
+      "swap_model": "inswapper_128.onnx",
+      "facedetection": "retinaface_resnet50",
+      "face_restore_model": "GFPGANv1.4.pth",
+      "face_restore_visibility": 1.0,
+      "codeformer_fidelity": 0.5,
+      "detect_gender_source": "no",
+      "detect_gender_input": "no",
+      "source_faces_index": "0",
+      "input_faces_index": "0",
+      "console_log_level": 1
+    },
+    "_meta": {
+      "title": "Face Swap"
+    }
+  },
+  "4": {
+    "class_type": "FaceEnhancer",
+    "inputs": {
+      "images": ["3", 0],
+      "model": "codeformer",
+      "fidelity": 0.7,
+      "enhance_background": false
+    },
+    "_meta": {
+      "title": "Enhance Face",
+      "enabled": true
+    }
+  },
+  "5": {
+    "class_type": "VHS_VideoCombine",
+    "inputs": {
+      "images": ["4", 0],
+      "frame_rate": 30,
+      "loop_count": 0,
+      "filename_prefix": "faceswap_output",
+      "format": "video/mp4",
+      "pingpong": false,
+      "save_output": true,
+      "audio": ["2", 1]
+    },
+    "_meta": {
+      "title": "Save Output Video"
+    }
+  }
+}
