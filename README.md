@@ -7,7 +7,9 @@ Real-time VFX motion capture system using state-of-the-art AI video generation m
 - **Image-to-Video Mode**: Upload a reference image and input video, then generate a new video where your character performs the motions
 - **Real-Time Camera Mode**: Use your webcam/phone camera to control a character in real-time
 - **Natural Language Prompts**: Describe what you want in plain English
-- **Multiple AI Models**: Wan 2.6 R2V, Wan VACE, LivePortrait, Deep-Live-Cam
+- **Native Inference Engine**: Optimized Python implementations for maximum performance
+- **Smart Optimization**: Source face caching for high-performance real-time face swapping
+- **Multiple AI Models**: Wan 2.6 R2V, Wan VACE, LivePortrait, InsightFace
 
 ## Quick Start
 
@@ -15,7 +17,7 @@ Real-time VFX motion capture system using state-of-the-art AI video generation m
 
 - Python 3.10+
 - Node.js 18+
-- Docker & Docker Compose
+- Docker & Docker Compose (optional for Redis)
 - NVIDIA GPU (8GB+ VRAM recommended)
 - FFmpeg
 
@@ -51,10 +53,10 @@ Or download manually:
 make dev
 
 # Or start individually:
-make comfyui    # Start ComfyUI (required)
 make backend    # Start FastAPI backend
 make frontend   # Start Next.js frontend
 make worker     # Start Celery worker
+make redis      # Start Redis (required)
 ```
 
 Open http://localhost:3000 in your browser.
@@ -90,8 +92,9 @@ docker-compose logs -f
                     ┌──────────────────┼──────────────────┐
                     ▼                  ▼                  ▼
 ┌─────────────────────────┐ ┌─────────────────────────┐ ┌─────────────────────────┐
-│   Celery Workers        │ │   Redis                 │ │   ComfyUI               │
-│   (Async Processing)    │ │   (Job Queue)           │ │   (AI Inference)        │
+│   Celery Workers        │ │   Redis                 │ │ Native Inference Engine │
+│   (Async Processing)    │ │   (Job Queue)           │ │ (Wan, LivePortrait,     │
+│                         │ │                         │ │  InsightFace)           │
 └─────────────────────────┘ └─────────────────────────┘ └─────────────────────────┘
 ```
 
@@ -146,16 +149,16 @@ vfx-motion-capture/
 ├── backend/
 │   ├── api/              # FastAPI routes and WebSocket handlers
 │   ├── core/             # Configuration, models, exceptions
-│   ├── services/         # Business logic (ComfyUI, video processing, etc.)
+│   ├── services/         # Business logic
+│   │   ├── inference/    # Native AI model implementations
+│   │   └── ...           # Other services (files, jobs, etc.)
 │   ├── workers/          # Celery async tasks
-│   └── comfyui_workflows/ # ComfyUI workflow JSON files
 ├── frontend/
 │   ├── src/
 │   │   ├── components/   # React components
 │   │   ├── hooks/        # Custom React hooks
 │   │   ├── pages/        # Next.js pages
 │   │   └── services/     # API client
-├── comfyui/              # ComfyUI Docker setup
 ├── models/               # AI model weights (git-ignored)
 ├── scripts/              # Setup and utility scripts
 ├── docker-compose.yml    # Docker orchestration
@@ -175,10 +178,6 @@ vfx-motion-capture/
 Copy `.env.example` to `.env` and configure:
 
 ```bash
-# ComfyUI connection
-COMFYUI_HOST=localhost
-COMFYUI_PORT=8188
-
 # Redis
 REDIS_HOST=localhost
 REDIS_PORT=6379
@@ -189,11 +188,6 @@ ENABLE_FP16=true
 ```
 
 ## Troubleshooting
-
-### ComfyUI not connecting
-- Ensure ComfyUI is running: `make comfyui`
-- Check logs: `docker-compose logs comfyui`
-- Verify port 8188 is accessible
 
 ### Out of GPU memory
 - Use Draft quality mode
@@ -222,4 +216,3 @@ MIT License - see LICENSE file for details.
 - [Wan Video](https://github.com/Wan-Video/Wan2.1) - Video generation models
 - [LivePortrait](https://github.com/KwaiVGI/LivePortrait) - Portrait animation
 - [Deep-Live-Cam](https://github.com/hacksider/Deep-Live-Cam) - Real-time face swap
-- [ComfyUI](https://github.com/comfyanonymous/ComfyUI) - AI workflow engine
