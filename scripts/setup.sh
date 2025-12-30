@@ -67,16 +67,20 @@ echo "Python version: $PYTHON_VERSION"
 NODE_VERSION=$(node --version)
 echo "Node version: $NODE_VERSION"
 
-# Check for NVIDIA GPU
-echo ""
-echo "Checking for NVIDIA GPU..."
-if command -v nvidia-smi &> /dev/null; then
-    GPU_INFO=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null || echo "")
-    if [ -n "$GPU_INFO" ]; then
-        echo -e "${GREEN}✓${NC} NVIDIA GPU found: $GPU_INFO"
-    fi
+# Check for NVIDIA GPU (Skip on macOS)
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    echo -e "${YELLOW}macOS detected. Skipping NVIDIA GPU check.${NC}"
 else
-    echo -e "${YELLOW}⚠${NC} nvidia-smi not found. GPU acceleration may not be available."
+    echo ""
+    echo "Checking for NVIDIA GPU..."
+    if command -v nvidia-smi &> /dev/null; then
+        GPU_INFO=$(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null || echo "")
+        if [ -n "$GPU_INFO" ]; then
+            echo -e "${GREEN}✓${NC} NVIDIA GPU found: $GPU_INFO"
+        fi
+    else
+        echo -e "${YELLOW}⚠${NC} nvidia-smi not found. GPU acceleration may not be available."
+    fi
 fi
 
 # Create directories
@@ -122,10 +126,7 @@ echo "   - Wan 2.1 VACE: huggingface-cli download Wan-AI/Wan2.1-VACE-14B"
 echo "   - Wan 2.6 R2V: huggingface-cli download Wan-AI/Wan2.6-R2V-14B"
 echo "   - LivePortrait: git clone https://github.com/KwaiVGI/LivePortrait"
 echo ""
-echo "3. Start ComfyUI:"
-echo "   cd comfyui && docker-compose up"
-echo ""
-echo "4. Start development servers:"
+echo "3. Start development servers:"
 echo "   make dev"
 echo ""
 echo "5. Open http://localhost:3000 in your browser"

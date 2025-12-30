@@ -140,7 +140,7 @@ async def job_progress_websocket(websocket: WebSocket, job_id: str):
                     break
 
     except WebSocketDisconnect:
-        pass
+        logger.info(f"WebSocket disconnected for job {job_id}")
     except Exception as e:
         logger.warning(f"WebSocket error for job {job_id}: {e}")
     finally:
@@ -246,7 +246,7 @@ async def realtime_processing_websocket(websocket: WebSocket, session_id: str):
                 await websocket.send_bytes(result_data)
 
     except WebSocketDisconnect:
-        pass
+        logger.info(f"Real-time session disconnected: {session_id}")
     except Exception as e:
         logger.error(f"Real-time processing error: {e}")
         try:
@@ -255,7 +255,7 @@ async def realtime_processing_websocket(websocket: WebSocket, session_id: str):
                 "message": str(e),
             })
         except Exception:
-            pass
+            logger.debug("Could not send error message to closed websocket")
     finally:
         # Cleanup
         session["status"] = "closed"
@@ -274,7 +274,8 @@ async def initialize_realtime_processor(session: Dict[str, Any]) -> Any:
     from backend.core.models import GenerationMode
     import cv2
     import numpy as np
-    from PIL import Image
+    from backend.services.inference.face_swapper import get_face_swapper
+    from backend.services.inference.live_portrait import get_live_portrait_service
 
     config = session["config"]
     mode = GenerationMode(config["mode"])
@@ -292,33 +293,13 @@ async def initialize_realtime_processor(session: Dict[str, Any]) -> Any:
     }
 
     if mode == GenerationMode.LIVEPORTRAIT:
-        # Initialize LivePortrait
-        try:
-            # Note: This is a placeholder - actual implementation would load
-            # the LivePortrait model
-            logger.info("Initializing LivePortrait processor")
-            # from liveportrait import LivePortraitPipeline
-            # processor["model"] = LivePortraitPipeline()
-            # processor["model"].prepare(reference_image)
-        except Exception as e:
-            logger.warning(f"Failed to initialize LivePortrait: {e}")
+        logger.info("Initializing LivePortrait processor")
+        processor["model"] = get_live_portrait_service()
 
     elif mode == GenerationMode.DEEP_LIVE_CAM:
-        # Initialize Deep Live Cam / face swapper
-        try:
-            logger.info("Initializing face swap processor")
-            from backend.services.face_detector import get_face_detector
-
-            face_detector = get_face_detector()
-            await face_detector.initialize()
-
-            # Extract source face embedding
-            source_face = await face_detector.get_primary_face(reference_image)
-            processor["source_face"] = source_face
-            processor["face_detector"] = face_detector
-        except Exception as e:
-            logger.warning(f"Failed to initialize face detector: {e}")
-
+        logger.info("Initializing face swap processor")
+        processor["model"] = get_face_swapper()
+        
     return processor
 
 
@@ -340,43 +321,28 @@ async def process_frame(
         raise ValueError("Failed to decode frame")
 
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
     mode = processor["mode"]
     result = frame_rgb  # Default to passthrough
 
-    if mode == GenerationMode.LIVEPORTRAIT:
-        # Apply LivePortrait transformation
-        if processor.get("model"):
-            # result = processor["model"].animate(frame_rgb)
-            pass
-        else:
-            # Fallback: simple color adjustment to show processing
-            result = cv2.addWeighted(
-                frame_rgb, 0.7,
-                processor["reference_image"][:frame_rgb.shape[0], :frame_rgb.shape[1]],
-                0.3,
-                0
-            ) if processor["reference_image"].shape[:2] >= frame_rgb.shape[:2] else frame_rgb
+    try:
+        if mode == GenerationMode.LIVEPORTRAIT:
+            if processor.get("model"):
+                # Run synchronous method if fast or wrap in executor
+                result = processor["model"].process_frame(processor["reference_image"], frame_rgb)
+            else:
+                result = frame_rgb
 
-    elif mode == GenerationMode.DEEP_LIVE_CAM:
-        # Apply face swap
-        face_detector = processor.get("face_detector")
-        if face_detector:
-            try:
-                # Detect face in current frame
-                faces = await face_detector.detect_faces(frame_rgb, max_faces=1)
-                if faces:
-                    # In a full implementation, we would:
-                    # 1. Align the source face to the target position
-                    # 2. Blend the faces together
-                    # 3. Apply color correction
-                    # For now, just overlay the reference
-                    source_face = processor.get("source_face")
-                    if source_face:
-                        # Draw indicator that processing is happening
-                        result = face_detector.draw_faces(frame_rgb, faces)
-            except Exception as e:
-                logger.warning(f"Face processing error: {e}")
+        elif mode == GenerationMode.DEEP_LIVE_CAM:
+            if processor.get("model"):
+                # Swap face - async
+                result = await processor["model"].swap_face(processor["reference_image"], frame_rgb)
+            else:
+                result = frame_rgb
+                
+    except Exception as e:
+        logger.error(f"Frame processing error: {e}")
+        # Return original frame on error
+        result = frame_rgb
 
     # Encode result
     result_bgr = cv2.cvtColor(result, cv2.COLOR_RGB2BGR)
@@ -434,6 +400,6 @@ async def status_websocket(websocket: WebSocket):
                 })
 
     except WebSocketDisconnect:
-        pass
+        logger.info("Status WebSocket disconnected")
     finally:
         manager.disconnect(websocket, "status")
