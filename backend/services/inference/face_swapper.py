@@ -9,6 +9,7 @@ import numpy as np
 import insightface
 from loguru import logger
 from backend.core.config import settings
+from backend.services.device import resolve_device
 from backend.services.face_detector import get_face_detector
 from backend.services.model_manager import get_model_manager
 
@@ -16,7 +17,7 @@ class FaceSwapper:
     def __init__(self):
         self.face_detector = get_face_detector()
         self.model_manager = get_model_manager()
-        self.device = settings.device
+        self.device = resolve_device(settings.device)
         
     def _load_swapper(self):
         """Load the inswapper model via ModelManager."""

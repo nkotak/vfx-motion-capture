@@ -8,12 +8,13 @@ import numpy as np
 from typing import Optional
 from loguru import logger
 from backend.core.config import settings
+from backend.services.device import resolve_device
 from backend.services.model_manager import get_model_manager
 
 class WanVideoService:
     def __init__(self):
         self.model_manager = get_model_manager()
-        self.device = settings.device
+        self.device = resolve_device(settings.device)
         
     def _load_pipeline(self):
         def loader():
@@ -26,8 +27,7 @@ class WanVideoService:
                     model_id, 
                     torch_dtype=torch.float16 if settings.enable_fp16 else torch.float32
                 )
-                if self.device != "auto":
-                    pipe.to(self.device)
+                pipe.to(self.device)
                 return pipe
             except ImportError:
                 logger.warning("Diffusers not installed.")
