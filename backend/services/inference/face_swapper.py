@@ -17,6 +17,9 @@ class FaceSwapper:
         self.face_detector = get_face_detector()
         self.model_manager = get_model_manager()
         self.device = settings.device
+        # Cache for source face to avoid redundant detection in real-time processing
+        self._cached_source_face = None
+        self._cached_source_hash = None
         
     def _load_swapper(self):
         """Load the inswapper model via ModelManager."""
@@ -37,15 +40,67 @@ class FaceSwapper:
             
         return self.model_manager.load_model("inswapper_128", loader)
 
+    def _compute_image_hash(self, image: np.ndarray) -> int:
+        """Compute a hash for an image to detect changes."""
+        # Use a simple hash based on image shape and sampled pixels for speed
+        # This is faster than full image hashing while still detecting most changes
+        h = hash((image.shape, image.dtype.name))
+        # Sample corners and center for change detection
+        if image.size > 0:
+            h ^= hash(image[0, 0].tobytes())
+            h ^= hash(image[-1, -1].tobytes())
+            h ^= hash(image[image.shape[0]//2, image.shape[1]//2].tobytes())
+        return h
+
+    async def set_source_face(self, source_img: np.ndarray) -> bool:
+        """
+        Pre-extract and cache the source face for efficient real-time processing.
+        
+        Call this once with the source image before processing video frames.
+        Returns True if a face was successfully detected and cached.
+        """
+        try:
+            source_face = await self.face_detector.get_primary_face(source_img)
+            self._cached_source_face = source_face
+            self._cached_source_hash = self._compute_image_hash(source_img)
+            logger.info("Source face cached for real-time processing")
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to cache source face: {e}")
+            self._cached_source_face = None
+            self._cached_source_hash = None
+            return False
+
+    def clear_source_cache(self) -> None:
+        """Clear the cached source face."""
+        self._cached_source_face = None
+        self._cached_source_hash = None
+
+    async def _get_source_face(self, source_img: np.ndarray):
+        """
+        Get source face, using cache if available and image hasn't changed.
+        """
+        current_hash = self._compute_image_hash(source_img)
+        
+        # Use cached face if available and source image hasn't changed
+        if self._cached_source_face is not None and self._cached_source_hash == current_hash:
+            return self._cached_source_face
+        
+        # Detect and cache the new source face
+        source_face = await self.face_detector.get_primary_face(source_img)
+        self._cached_source_face = source_face
+        self._cached_source_hash = current_hash
+        return source_face
+
     async def swap_face(self, source_img: np.ndarray, target_img: np.ndarray) -> np.ndarray:
         """
         Swap face from source_img into target_img.
         """
         swapper = self._load_swapper()
         
-        # 1. Detect source face
+        # 1. Get source face (uses cache for real-time efficiency)
         try:
-            source_face = await self.face_detector.get_primary_face(source_img)
+            source_face = await self._get_source_face(source_img)
         except Exception as e:
             logger.warning(f"Could not find source face: {e}")
             return target_img
