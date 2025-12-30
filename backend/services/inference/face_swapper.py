@@ -26,6 +26,10 @@ class FaceSwapper:
             else:
                 self.device = "cpu"
         
+        # Cache for source face to avoid redundant detection in real-time processing
+        self._cached_source_face = None
+        self._cached_source_hash = None
+        
     def _load_swapper(self):
         """Load the inswapper model via ModelManager."""
         def loader():
