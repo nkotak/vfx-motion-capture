@@ -298,7 +298,10 @@ async def initialize_realtime_processor(session: Dict[str, Any]) -> Any:
 
     elif mode == GenerationMode.DEEP_LIVE_CAM:
         logger.info("Initializing face swap processor")
-        processor["model"] = get_face_swapper()
+        face_swapper = get_face_swapper()
+        # Pre-cache the source face for efficient real-time processing
+        await face_swapper.set_source_face(reference_image)
+        processor["model"] = face_swapper
         
     return processor
 
@@ -354,6 +357,9 @@ async def process_frame(
 async def cleanup_processor(processor: Dict[str, Any]) -> None:
     """Clean up processor resources."""
     if processor.get("model"):
+        # Clear cached source face to free memory
+        if hasattr(processor["model"], "clear_source_cache"):
+            processor["model"].clear_source_cache()
         if hasattr(processor["model"], "close"):
             processor["model"].close()
 

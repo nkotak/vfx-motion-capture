@@ -136,6 +136,9 @@ async def generate_deep_live_cam(
     source_img = cv2.imread(str(ref_image_path))
     source_img = cv2.cvtColor(source_img, cv2.COLOR_BGR2RGB)
 
+    # Pre-cache the source face for efficient frame processing
+    await face_swapper.set_source_face(source_img)
+
     await job_manager.update_progress(job_id, 10, "Processing video")
 
     # Process video frame by frame
