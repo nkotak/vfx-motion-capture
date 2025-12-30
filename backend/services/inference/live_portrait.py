@@ -12,6 +12,14 @@ class LivePortraitService:
     def __init__(self):
         self.model_manager = get_model_manager()
         self.device = settings.device
+        if self.device == "auto":
+            import torch
+            if torch.cuda.is_available():
+                self.device = "cuda"
+            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                self.device = "mps"
+            else:
+                self.device = "cpu"
         
     def _load_pipeline(self):
         """Load LivePortrait pipeline."""

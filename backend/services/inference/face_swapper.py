@@ -17,6 +17,15 @@ class FaceSwapper:
         self.face_detector = get_face_detector()
         self.model_manager = get_model_manager()
         self.device = settings.device
+        if self.device == "auto":
+            import torch
+            if torch.cuda.is_available():
+                self.device = "cuda"
+            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                self.device = "mps"
+            else:
+                self.device = "cpu"
+        
         # Cache for source face to avoid redundant detection in real-time processing
         self._cached_source_face = None
         self._cached_source_hash = None
