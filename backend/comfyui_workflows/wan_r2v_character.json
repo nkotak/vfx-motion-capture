@@ -1,0 +1,98 @@
+{
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "reference_image"
+    },
+    "_meta": {
+      "title": "Load Reference Character"
+    }
+  },
+  "2": {
+    "class_type": "DownloadAndLoadWanR2V",
+    "inputs": {
+      "model": "Wan-AI/Wan2.6-R2V-14B",
+      "precision": "bf16"
+    },
+    "_meta": {
+      "title": "Load Wan R2V Model"
+    }
+  },
+  "3": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "prompt",
+      "clip": ["2", 1]
+    },
+    "_meta": {
+      "title": "Positive Prompt"
+    }
+  },
+  "4": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "negative_prompt",
+      "clip": ["2", 1]
+    },
+    "_meta": {
+      "title": "Negative Prompt"
+    }
+  },
+  "5": {
+    "class_type": "WanR2VReferenceEmbed",
+    "inputs": {
+      "image": ["1", 0],
+      "r2v_model": ["2", 0],
+      "face_weight": 1.0,
+      "body_weight": 0.8
+    },
+    "_meta": {
+      "title": "Create Reference Embedding"
+    }
+  },
+  "6": {
+    "class_type": "WanR2VGenerate",
+    "inputs": {
+      "positive": ["3", 0],
+      "negative": ["4", 0],
+      "r2v_model": ["2", 0],
+      "reference_embeds": ["5", 0],
+      "width": 1280,
+      "height": 720,
+      "duration": 5,
+      "fps": 24,
+      "steps": 30,
+      "cfg_scale": 7.5,
+      "seed": -1,
+      "multi_shot": false
+    },
+    "_meta": {
+      "title": "Generate Video"
+    }
+  },
+  "7": {
+    "class_type": "WanVAEDecode",
+    "inputs": {
+      "latents": ["6", 0],
+      "vae": ["2", 2]
+    },
+    "_meta": {
+      "title": "Decode Video"
+    }
+  },
+  "8": {
+    "class_type": "VHS_VideoCombine",
+    "inputs": {
+      "images": ["7", 0],
+      "frame_rate": 24,
+      "loop_count": 0,
+      "filename_prefix": "wan_r2v_output",
+      "format": "video/mp4",
+      "pingpong": false,
+      "save_output": true
+    },
+    "_meta": {
+      "title": "Save Output Video"
+    }
+  }
+}

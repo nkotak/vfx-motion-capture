@@ -1,0 +1,117 @@
+version: '3.8'
+
+services:
+  # Frontend (Next.js)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://backend:8000
+    depends_on:
+      - backend
+    networks:
+      - vfx-network
+
+  # Backend (FastAPI)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - COMFYUI_HOST=comfyui
+      - COMFYUI_PORT=8188
+      - DATABASE_URL=sqlite+aiosqlite:///./data/vfx_motion_capture.db
+    volumes:
+      - ./uploads:/app/uploads
+      - ./outputs:/app/outputs
+      - ./models:/app/models
+      - backend-data:/app/data
+    depends_on:
+      - redis
+      - comfyui
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    networks:
+      - vfx-network
+
+  # Celery Worker
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: celery -A backend.workers.celery_app worker --loglevel=info --concurrency=1
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - COMFYUI_HOST=comfyui
+      - COMFYUI_PORT=8188
+    volumes:
+      - ./uploads:/app/uploads
+      - ./outputs:/app/outputs
+      - ./models:/app/models
+    depends_on:
+      - redis
+      - comfyui
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    networks:
+      - vfx-network
+
+  # Redis
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - vfx-network
+
+  # ComfyUI
+  comfyui:
+    image: ghcr.io/ai-dock/comfyui:latest
+    ports:
+      - "8188:8188"
+    environment:
+      - CLI_ARGS=--listen 0.0.0.0 --port 8188
+    volumes:
+      - ./models:/workspace/ComfyUI/models
+      - ./comfyui/custom_nodes:/workspace/ComfyUI/custom_nodes
+      - comfyui-output:/workspace/ComfyUI/output
+      - comfyui-input:/workspace/ComfyUI/input
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    networks:
+      - vfx-network
+
+volumes:
+  redis-data:
+  backend-data:
+  comfyui-output:
+  comfyui-input:
+
+networks:
+  vfx-network:
+    driver: bridge

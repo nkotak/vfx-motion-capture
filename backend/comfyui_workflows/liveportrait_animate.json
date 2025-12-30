@@ -1,0 +1,80 @@
+{
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "source_image"
+    },
+    "_meta": {
+      "title": "Load Source Portrait"
+    }
+  },
+  "2": {
+    "class_type": "VHS_LoadVideo",
+    "inputs": {
+      "video": "driving_video",
+      "force_rate": 0,
+      "force_size": "Disabled",
+      "custom_width": 512,
+      "custom_height": 512,
+      "frame_load_cap": 300,
+      "skip_first_frames": 0,
+      "select_every_nth": 1
+    },
+    "_meta": {
+      "title": "Load Driving Video"
+    }
+  },
+  "3": {
+    "class_type": "LivePortraitModelLoader",
+    "inputs": {
+      "model_name": "liveportrait_v2",
+      "precision": "fp16"
+    },
+    "_meta": {
+      "title": "Load LivePortrait Model"
+    }
+  },
+  "4": {
+    "class_type": "LivePortraitCropper",
+    "inputs": {
+      "image": ["1", 0],
+      "crop_factor": 2.3,
+      "detection_threshold": 0.5
+    },
+    "_meta": {
+      "title": "Crop Source Face"
+    }
+  },
+  "5": {
+    "class_type": "LivePortraitProcess",
+    "inputs": {
+      "source_image": ["4", 0],
+      "driving_images": ["2", 0],
+      "model": ["3", 0],
+      "relative_motion_mode": "source_video_smoothed",
+      "driving_smooth_observation_variance": 0.5,
+      "lip_ratio": 0.9,
+      "eye_ratio": 0.9,
+      "stitching": true,
+      "paste_back": true
+    },
+    "_meta": {
+      "title": "Animate Portrait"
+    }
+  },
+  "6": {
+    "class_type": "VHS_VideoCombine",
+    "inputs": {
+      "images": ["5", 0],
+      "frame_rate": 30,
+      "loop_count": 0,
+      "filename_prefix": "liveportrait_output",
+      "format": "video/mp4",
+      "pingpong": false,
+      "save_output": true
+    },
+    "_meta": {
+      "title": "Save Output Video"
+    }
+  }
+}

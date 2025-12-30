@@ -1,0 +1,36 @@
+# Standalone ComfyUI setup for development
+version: '3.8'
+
+services:
+  comfyui:
+    image: ghcr.io/ai-dock/comfyui:latest
+    container_name: vfx-comfyui
+    ports:
+      - "8188:8188"
+    environment:
+      - CLI_ARGS=--listen 0.0.0.0 --port 8188 --enable-cors-header
+    volumes:
+      # Model directories
+      - ../models/checkpoints:/workspace/ComfyUI/models/checkpoints
+      - ../models/vae:/workspace/ComfyUI/models/vae
+      - ../models/loras:/workspace/ComfyUI/models/loras
+      - ../models/controlnet:/workspace/ComfyUI/models/controlnet
+      - ../models/diffusion_models:/workspace/ComfyUI/models/diffusion_models
+      - ../models/text_encoders:/workspace/ComfyUI/models/text_encoders
+      - ../models/insightface:/workspace/ComfyUI/models/insightface
+      - ../models/liveportrait:/workspace/ComfyUI/models/liveportrait
+
+      # Custom nodes
+      - ./custom_nodes:/workspace/ComfyUI/custom_nodes
+
+      # Input/Output
+      - ../uploads:/workspace/ComfyUI/input
+      - ../outputs:/workspace/ComfyUI/output
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
