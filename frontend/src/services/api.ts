@@ -129,6 +129,24 @@ export interface RealtimeSessionMetrics {
   last_updated_at?: string | null;
 }
 
+export interface RealtimeCompatibility {
+  gpu_available: boolean;
+  gpu_name?: string;
+  gpu_memory_gb?: number;
+  capability: string;
+  estimated_fps: number;
+  runtime?: 'cpu' | 'cuda' | 'mps';
+  recommended_session?: {
+    input_resolution: [number, number];
+    output_resolution: [number, number];
+    target_fps: number;
+    jpeg_quality: number;
+    worker_processes: number;
+    full_frame_inference: boolean;
+  };
+  recommended_mode?: GenerationMode;
+}
+
 class ApiClient {
   private baseUrl: string;
 
@@ -337,23 +355,7 @@ class ApiClient {
     });
   }
 
-  async checkRealtimeCompatibility(): Promise<{
-    gpu_available: boolean;
-    gpu_name?: string;
-    gpu_memory_gb?: number;
-    capability: string;
-    estimated_fps: number;
-    runtime?: 'cpu' | 'cuda' | 'mps';
-    recommended_session?: {
-      input_resolution: [number, number];
-      output_resolution: [number, number];
-      target_fps: number;
-      jpeg_quality: number;
-      worker_processes: number;
-      full_frame_inference: boolean;
-    };
-    recommended_mode?: GenerationMode;
-  }> {
+  async checkRealtimeCompatibility(): Promise<RealtimeCompatibility> {
     return this.request('/realtime/check-compatibility');
   }
 

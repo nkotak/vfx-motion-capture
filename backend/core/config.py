@@ -103,6 +103,8 @@ class Settings(BaseSettings):
     realtime_max_inflight_frames: int = 1
     realtime_worker_processes: int = 2
     realtime_worker_warmup: bool = True
+    realtime_use_shared_memory: bool = True
+    realtime_shared_memory_threshold_bytes: int = 262144
     realtime_full_frame_inference: bool = True
     realtime_tile_size: int = 0
     realtime_tile_overlap: int = 64

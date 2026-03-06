@@ -20,6 +20,12 @@ from backend.services.realtime.pipeline import (
     initialize_realtime_processor,
     process_frame,
 )
+from backend.services.realtime.shared_memory import (
+    cleanup_shared_memory_payload,
+    close_shared_memory,
+    create_shared_memory_payload,
+    read_shared_memory_payload,
+)
 
 
 def _worker_process_main(
@@ -72,21 +78,46 @@ def _worker_process_main(
                     if session_id not in processors:
                         raise KeyError(f"Unknown realtime session: {session_id}")
 
+                    if task.get("frame_ref"):
+                        frame_data = read_shared_memory_payload(task["frame_ref"], unlink=True)
+                    else:
+                        frame_data = task["frame_data"]
+
                     start_time = time.perf_counter()
                     result = loop.run_until_complete(
                         process_frame(
                             processors[session_id],
-                            task["frame_data"],
+                            frame_data,
                             sessions[session_id],
                         )
                     )
-                    output_queue.put({
+                    frame_payload = result["frame_data"]
+                    response_message = {
                         "type": "frame_result",
                         "request_id": request_id,
                         "worker_id": worker_id,
-                        "frame_data": result["frame_data"],
                         "metrics": result.get("metrics", {}),
                         "latency_ms": (time.perf_counter() - start_time) * 1000,
+                    }
+                    if (
+                        settings.realtime_use_shared_memory
+                        and len(frame_payload) >= settings.realtime_shared_memory_threshold_bytes
+                    ):
+                        frame_ref, shm = create_shared_memory_payload(frame_payload)
+                        cleanup_required = False
+                        try:
+                            response_message["frame_ref"] = frame_ref
+                            output_queue.put(response_message)
+                        except Exception:
+                            cleanup_required = True
+                            raise
+                        finally:
+                            close_shared_memory(shm, unlink=cleanup_required)
+                        continue
+
+                    output_queue.put({
+                        **response_message,
+                        "frame_data": frame_payload,
                     })
 
                 elif task_type == "close_session":
@@ -260,17 +291,18 @@ class RealtimeWorkerPool:
         if worker_id is None:
             raise KeyError(f"Realtime session is not registered: {session_id}")
 
-        message = await self._dispatch(
-            worker_id,
-            {
-                "type": "process_frame",
-                "session_id": session_id,
-                "frame_data": frame_data,
-            },
-            timeout=max(30.0, settings.realtime_max_latency_ms / 1000 * 10),
-        )
+        task, shm = self._build_frame_task(session_id, frame_data)
+        try:
+            message = await self._dispatch(
+                worker_id,
+                task,
+                timeout=max(30.0, settings.realtime_max_latency_ms / 1000 * 10),
+            )
+        finally:
+            if shm is not None:
+                close_shared_memory(shm)
         return {
-            "frame_data": message["frame_data"],
+            "frame_data": self._resolve_frame_payload(message),
             "latency_ms": message.get("latency_ms", 0.0),
             "metrics": message.get("metrics", {}),
             "worker_id": worker_id,
@@ -295,6 +327,8 @@ class RealtimeWorkerPool:
                 future = self._pending.pop(request_id, None)
 
             if future is None or future.done() or self._loop is None:
+                if message.get("frame_ref"):
+                    cleanup_shared_memory_payload(message["frame_ref"])
                 continue
 
             if message_type == "error":
@@ -327,6 +361,29 @@ class RealtimeWorkerPool:
             with self._pending_lock:
                 self._pending.pop(request_id, None)
             raise
+
+    def _resolve_frame_payload(self, message: Dict[str, Any]) -> bytes:
+        """Resolve inline or shared-memory frame payloads."""
+        if message.get("frame_ref"):
+            return read_shared_memory_payload(message["frame_ref"], unlink=True)
+        return message["frame_data"]
+
+    def _build_frame_task(self, session_id: str, frame_data: bytes) -> tuple[Dict[str, Any], Any]:
+        """Create a queue-friendly task payload for a frame."""
+        task: Dict[str, Any] = {
+            "type": "process_frame",
+            "session_id": session_id,
+        }
+        shm = None
+        if (
+            settings.realtime_use_shared_memory
+            and len(frame_data) >= settings.realtime_shared_memory_threshold_bytes
+        ):
+            frame_ref, shm = create_shared_memory_payload(frame_data)
+            task["frame_ref"] = frame_ref
+        else:
+            task["frame_data"] = frame_data
+        return task, shm
 
 
 _realtime_worker_pool: Optional[RealtimeWorkerPool] = None

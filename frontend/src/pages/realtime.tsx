@@ -12,6 +12,7 @@ import { useRealtimeWebSocket } from '@/hooks/useWebSocket';
 import api, {
   UploadResponse,
   GenerationMode,
+  RealtimeCompatibility,
   RealtimeSession,
   RealtimeSessionMetrics,
 } from '@/services/api';
@@ -34,6 +35,7 @@ export default function RealtimePage() {
   const [captureResolution, setCaptureResolution] = useState<[number, number]>([1920, 1080]);
   const [targetFps, setTargetFps] = useState(24);
   const [jpegQuality, setJpegQuality] = useState(92);
+  const [compatibility, setCompatibility] = useState<RealtimeCompatibility | null>(null);
   const [sessionMetrics, setSessionMetrics] = useState<RealtimeSessionMetrics | null>(null);
   const processedFrameRef = useRef<string | null>(null);
 
@@ -50,6 +52,30 @@ export default function RealtimePage() {
     if (processedFrameRef.current?.startsWith('blob:')) {
       URL.revokeObjectURL(processedFrameRef.current);
     }
+  }, []);
+
+  useEffect(() => {
+    let isCancelled = false;
+    api.checkRealtimeCompatibility()
+      .then((response) => {
+        if (!isCancelled) {
+          setCompatibility(response);
+          if (response.recommended_session) {
+            setCaptureResolution(response.recommended_session.input_resolution);
+            setTargetFps(response.recommended_session.target_fps);
+            setJpegQuality(response.recommended_session.jpeg_quality);
+          }
+        }
+      })
+      .catch((error) => {
+        if (!isCancelled) {
+          console.error('Failed to load realtime compatibility:', error);
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -165,6 +191,18 @@ export default function RealtimePage() {
   );
 
   const selectedResolution = `${captureResolution[0]}x${captureResolution[1]}`;
+  const applyRecommendedPreset = useCallback(() => {
+    if (!compatibility?.recommended_session) {
+      return;
+    }
+
+    setCaptureResolution(compatibility.recommended_session.input_resolution);
+    setTargetFps(compatibility.recommended_session.target_fps);
+    setJpegQuality(compatibility.recommended_session.jpeg_quality);
+    if (compatibility.recommended_mode && compatibility.recommended_mode !== 'auto') {
+      setMode(compatibility.recommended_mode as 'liveportrait' | 'deep_live_cam');
+    }
+  }, [compatibility]);
 
   return (
     <>
@@ -283,6 +321,26 @@ export default function RealtimePage() {
                 </h3>
 
                 <div className="space-y-3">
+                  {compatibility && (
+                    <div className="rounded-lg border border-dark-700 bg-dark-800 p-3 text-xs text-dark-300">
+                      <div className="font-medium text-white">
+                        {compatibility.gpu_name || 'Local runtime'} · {compatibility.runtime || 'cpu'}
+                      </div>
+                      <div className="mt-1">
+                        Capability: {compatibility.capability} · Estimated realtime FPS: {compatibility.estimated_fps}
+                      </div>
+                      {compatibility.recommended_session && (
+                        <button
+                          onClick={applyRecommendedPreset}
+                          disabled={isActive}
+                          className="mt-3 btn btn-secondary w-full"
+                        >
+                          Apply recommended preset
+                        </button>
+                      )}
+                    </div>
+                  )}
+
                   <label className="block text-sm">
                     <span className="mb-1 block text-dark-300">Capture + output resolution</span>
                     <select
