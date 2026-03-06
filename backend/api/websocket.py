@@ -11,6 +11,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from loguru import logger
 
 from backend.core.models import JobStatus, JobProgress
+from backend.services.realtime.adaptive import maybe_apply_adaptive_quality
 from backend.services.job_manager import get_job_manager
 from backend.services.realtime.metrics import record_dropped, record_processed, record_received
 from backend.services.realtime import get_realtime_worker_pool
@@ -281,8 +282,16 @@ async def realtime_processing_websocket(websocket: WebSocket, session_id: str):
                 worker_latency_ms=worker_latency_ms,
                 total_latency_ms=total_latency_ms,
                 stage_metrics=result.get("metrics", {}),
+                transport_metrics=result.get("transport_metrics", {}),
                 worker_id=result.get("worker_id"),
             )
+            adaptive_event = maybe_apply_adaptive_quality(session)
+            if adaptive_event:
+                await send_json_safe({
+                    "type": "adaptive_update",
+                    "message": adaptive_event,
+                    "config": session["config"],
+                })
             await send_bytes_safe(result["frame_data"])
 
             if stop_event.is_set():

@@ -205,6 +205,46 @@ class RealtimeConfig(BaseModel):
         default=True,
         description="Drop stale frames when the realtime pipeline falls behind"
     )
+    adaptive_quality: bool = Field(
+        default=True,
+        description="Allow the backend to adapt realtime quality settings when latency drifts high"
+    )
+    adaptive_latency_budget_ms: Optional[int] = Field(
+        default=None,
+        ge=0,
+        le=5000,
+        description="Latency budget before adaptive degradation starts; defaults to frame budget when unset"
+    )
+    adaptive_jpeg_step: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="JPEG quality step used by the adaptive controller"
+    )
+    adaptive_min_jpeg_quality: int = Field(
+        default=75,
+        ge=50,
+        le=100,
+        description="Lower bound for adaptive JPEG quality"
+    )
+    adaptive_cooldown_frames: int = Field(
+        default=24,
+        ge=1,
+        le=600,
+        description="Frames to wait between adaptive quality adjustments"
+    )
+    adaptive_tile_size: Optional[int] = Field(
+        default=1024,
+        ge=0,
+        le=4096,
+        description="Tile size to enable when adaptive mode needs a lower-latency full-frame path"
+    )
+    adaptive_min_tile_size: int = Field(
+        default=512,
+        ge=128,
+        le=4096,
+        description="Smallest tile size adaptive mode will use when degrading quality"
+    )
 
     @field_validator("input_resolution", "output_resolution", mode="before")
     @classmethod

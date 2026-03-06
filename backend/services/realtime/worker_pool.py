@@ -98,6 +98,10 @@ def _worker_process_main(
                         "worker_id": worker_id,
                         "metrics": result.get("metrics", {}),
                         "latency_ms": (time.perf_counter() - start_time) * 1000,
+                        "transport_metrics": {
+                            "output_shared_memory": False,
+                            "output_bytes": len(frame_payload),
+                        },
                     }
                     if (
                         settings.realtime_use_shared_memory
@@ -107,6 +111,7 @@ def _worker_process_main(
                         cleanup_required = False
                         try:
                             response_message["frame_ref"] = frame_ref
+                            response_message["transport_metrics"]["output_shared_memory"] = True
                             output_queue.put(response_message)
                         except Exception:
                             cleanup_required = True
@@ -169,8 +174,10 @@ class RealtimeWorkerPool:
         self._ctx = mp.get_context("spawn")
         self._workers: Dict[int, _WorkerHandle] = {}
         self._session_workers: Dict[str, int] = {}
-        self._pending: Dict[str, asyncio.Future] = {}
+        self._pending: Dict[str, Dict[str, Any]] = {}
         self._pending_lock = threading.Lock()
+        self._stats_lock = threading.Lock()
+        self._worker_stats: Dict[int, Dict[str, Any]] = {}
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._started = False
 
@@ -206,6 +213,24 @@ class RealtimeWorkerPool:
                 output_queue=output_queue,
                 result_thread=result_thread,
             )
+            self._worker_stats[worker_id] = {
+                "worker_id": worker_id,
+                "pending_requests": 0,
+                "processed_requests": 0,
+                "error_count": 0,
+                "avg_latency_ms": 0.0,
+                "last_latency_ms": 0.0,
+                "shared_memory_in_count": 0,
+                "shared_memory_in_bytes": 0,
+                "shared_memory_out_count": 0,
+                "shared_memory_out_bytes": 0,
+                "inline_transport_in_count": 0,
+                "inline_transport_in_bytes": 0,
+                "inline_transport_out_count": 0,
+                "inline_transport_out_bytes": 0,
+                "input_queue_size": 0,
+                "output_queue_size": 0,
+            }
 
         self._started = True
         logger.info(f"Started realtime worker pool with {self.worker_processes} processes")
@@ -228,7 +253,7 @@ class RealtimeWorkerPool:
                 worker.process.join(timeout=2.0)
 
         with self._pending_lock:
-            pending = list(self._pending.values())
+            pending = [entry["future"] for entry in self._pending.values()]
             self._pending.clear()
 
         for future in pending:
@@ -237,6 +262,7 @@ class RealtimeWorkerPool:
 
         self._workers.clear()
         self._session_workers.clear()
+        self._worker_stats.clear()
         self._started = False
         logger.info("Realtime worker pool shut down")
 
@@ -305,6 +331,7 @@ class RealtimeWorkerPool:
             "frame_data": self._resolve_frame_payload(message),
             "latency_ms": message.get("latency_ms", 0.0),
             "metrics": message.get("metrics", {}),
+            "transport_metrics": message.get("transport_metrics", {}),
             "worker_id": worker_id,
         }
 
@@ -324,12 +351,20 @@ class RealtimeWorkerPool:
                 continue
 
             with self._pending_lock:
-                future = self._pending.pop(request_id, None)
+                pending_entry = self._pending.pop(request_id, None)
 
-            if future is None or future.done() or self._loop is None:
+            if pending_entry is None:
                 if message.get("frame_ref"):
                     cleanup_shared_memory_payload(message["frame_ref"])
                 continue
+
+            future = pending_entry["future"]
+            if future.done() or self._loop is None:
+                if message.get("frame_ref"):
+                    cleanup_shared_memory_payload(message["frame_ref"])
+                continue
+
+            self._update_worker_stats(worker_id, pending_entry, message)
 
             if message_type == "error":
                 error = RuntimeError(message.get("message", "Realtime worker error"))
@@ -350,16 +385,32 @@ class RealtimeWorkerPool:
 
         loop = asyncio.get_running_loop()
         future: asyncio.Future = loop.create_future()
+        pending_entry = {
+            "future": future,
+            "worker_id": worker_id,
+            "task_type": task["type"],
+            "transport_metrics": task.get("transport_metrics", {}),
+        }
         with self._pending_lock:
-            self._pending[request_id] = future
+            self._pending[request_id] = pending_entry
 
         worker = self._workers[worker_id]
         try:
             await asyncio.to_thread(worker.input_queue.put, task)
+            if task["type"] == "process_frame":
+                with self._stats_lock:
+                    stats = self._worker_stats[worker_id]
+                    stats["pending_requests"] += 1
+                    stats["input_queue_size"] = _safe_qsize(worker.input_queue)
             return await asyncio.wait_for(future, timeout=timeout)
         except Exception:
             with self._pending_lock:
                 self._pending.pop(request_id, None)
+            if task["type"] == "process_frame":
+                with self._stats_lock:
+                    stats = self._worker_stats[worker_id]
+                    if stats["pending_requests"] > 0:
+                        stats["pending_requests"] -= 1
             raise
 
     def _resolve_frame_payload(self, message: Dict[str, Any]) -> bytes:
@@ -375,15 +426,97 @@ class RealtimeWorkerPool:
             "session_id": session_id,
         }
         shm = None
+        transport_metrics = {
+            "input_shared_memory": False,
+            "input_bytes": len(frame_data),
+        }
         if (
             settings.realtime_use_shared_memory
             and len(frame_data) >= settings.realtime_shared_memory_threshold_bytes
         ):
             frame_ref, shm = create_shared_memory_payload(frame_data)
             task["frame_ref"] = frame_ref
+            transport_metrics["input_shared_memory"] = True
         else:
             task["frame_data"] = frame_data
+        task["transport_metrics"] = transport_metrics
         return task, shm
+
+    def _update_worker_stats(
+        self,
+        worker_id: int,
+        pending_entry: Dict[str, Any],
+        message: Dict[str, Any],
+    ) -> None:
+        """Update worker telemetry after a task result arrives."""
+        with self._stats_lock:
+            stats = self._worker_stats[worker_id]
+            if stats["pending_requests"] > 0:
+                stats["pending_requests"] -= 1
+            stats["output_queue_size"] = _safe_qsize(self._workers[worker_id].output_queue)
+
+            if pending_entry["task_type"] != "process_frame":
+                if message.get("type") == "error":
+                    stats["error_count"] += 1
+                return
+
+            transport_in = pending_entry.get("transport_metrics", {})
+            if transport_in.get("input_shared_memory"):
+                stats["shared_memory_in_count"] += 1
+                stats["shared_memory_in_bytes"] += int(transport_in.get("input_bytes", 0))
+            else:
+                stats["inline_transport_in_count"] += 1
+                stats["inline_transport_in_bytes"] += int(transport_in.get("input_bytes", 0))
+
+            if message.get("type") == "error":
+                stats["error_count"] += 1
+                return
+
+            stats["processed_requests"] += 1
+            latency_ms = float(message.get("latency_ms", 0.0))
+            processed_requests = stats["processed_requests"]
+            stats["last_latency_ms"] = latency_ms
+            if processed_requests <= 1:
+                stats["avg_latency_ms"] = latency_ms
+            else:
+                previous = float(stats["avg_latency_ms"])
+                stats["avg_latency_ms"] = previous + ((latency_ms - previous) / processed_requests)
+
+            output_shared_memory = bool(message.get("frame_ref"))
+            output_bytes = int(message.get("transport_metrics", {}).get("output_bytes", 0))
+            if output_shared_memory:
+                stats["shared_memory_out_count"] += 1
+                stats["shared_memory_out_bytes"] += output_bytes
+            else:
+                stats["inline_transport_out_count"] += 1
+                stats["inline_transport_out_bytes"] += output_bytes
+
+    def snapshot_worker_stats(self) -> list[Dict[str, Any]]:
+        """Return current worker telemetry for APIs and debug panels."""
+        with self._stats_lock:
+            snapshots: list[Dict[str, Any]] = []
+            for worker_id, worker in self._workers.items():
+                stats = dict(self._worker_stats.get(worker_id, {}))
+                stats["active_sessions"] = len(worker.active_sessions)
+                stats["session_ids"] = sorted(worker.active_sessions)
+                stats["process_alive"] = worker.process.is_alive()
+                stats["input_queue_size"] = _safe_qsize(worker.input_queue)
+                stats["output_queue_size"] = _safe_qsize(worker.output_queue)
+                queue_capacity = max(1, settings.realtime_buffer_size * 2)
+                stats["saturation"] = min(
+                    1.0,
+                    float(stats.get("pending_requests", 0)) / float(queue_capacity),
+                )
+                snapshots.append(stats)
+            return sorted(snapshots, key=lambda item: item["worker_id"])
+
+
+def _safe_qsize(queue: mp.Queue) -> int:
+    """Best-effort queue size for diagnostics."""
+    try:
+        return max(0, int(queue.qsize()))
+    except (NotImplementedError, AttributeError):
+        return -1
 
 
 _realtime_worker_pool: Optional[RealtimeWorkerPool] = None

@@ -31,6 +31,21 @@ def create_realtime_metrics() -> Dict[str, Any]:
         "last_resize_ms": 0.0,
         "avg_tile_count": 0.0,
         "last_tile_count": 0,
+        "shared_memory_in_count": 0,
+        "shared_memory_in_bytes": 0,
+        "shared_memory_out_count": 0,
+        "shared_memory_out_bytes": 0,
+        "inline_transport_in_count": 0,
+        "inline_transport_in_bytes": 0,
+        "inline_transport_out_count": 0,
+        "inline_transport_out_bytes": 0,
+        "adaptive_adjustment_count": 0,
+        "adaptive_events": [],
+        "current_jpeg_quality": None,
+        "current_tile_size": None,
+        "current_full_frame_inference": None,
+        "current_target_fps": None,
+        "current_processing_mode": None,
         "worker_id": None,
         "last_updated_at": None,
     }
@@ -65,6 +80,7 @@ def record_processed(
     worker_latency_ms: float,
     total_latency_ms: float,
     stage_metrics: Optional[Dict[str, Any]] = None,
+    transport_metrics: Optional[Dict[str, Any]] = None,
     worker_id: Optional[int] = None,
 ) -> None:
     """Record a processed frame and update moving averages."""
@@ -125,7 +141,52 @@ def record_processed(
         float(stage_metrics.get("tile_count", 0)),
         processed_frames,
     )
+    if stage_metrics.get("processing_mode"):
+        metrics["current_processing_mode"] = stage_metrics.get("processing_mode")
+
+    transport_metrics = transport_metrics or {}
+    input_bytes = int(transport_metrics.get("input_bytes", 0))
+    output_bytes_metric = int(transport_metrics.get("output_bytes", output_bytes))
+    if transport_metrics.get("input_shared_memory"):
+        metrics["shared_memory_in_count"] += 1
+        metrics["shared_memory_in_bytes"] += max(0, input_bytes)
+    else:
+        metrics["inline_transport_in_count"] += 1
+        metrics["inline_transport_in_bytes"] += max(0, input_bytes)
+
+    if transport_metrics.get("output_shared_memory"):
+        metrics["shared_memory_out_count"] += 1
+        metrics["shared_memory_out_bytes"] += max(0, output_bytes_metric)
+    else:
+        metrics["inline_transport_out_count"] += 1
+        metrics["inline_transport_out_bytes"] += max(0, output_bytes_metric)
     metrics["last_updated_at"] = datetime.utcnow().isoformat()
+
+
+def record_adaptive_event(metrics: Dict[str, Any], message: str, config: Dict[str, Any]) -> None:
+    """Record an adaptive quality adjustment event."""
+    metrics["adaptive_adjustment_count"] += 1
+    events = metrics.setdefault("adaptive_events", [])
+    events.append({
+        "timestamp": datetime.utcnow().isoformat(),
+        "message": message,
+        "jpeg_quality": config.get("jpeg_quality"),
+        "tile_size": config.get("tile_size"),
+        "full_frame_inference": config.get("full_frame_inference"),
+        "target_fps": config.get("target_fps"),
+    })
+    if len(events) > 10:
+        del events[:-10]
+    sync_config_metrics(metrics, config)
+    metrics["last_updated_at"] = datetime.utcnow().isoformat()
+
+
+def sync_config_metrics(metrics: Dict[str, Any], config: Dict[str, Any]) -> None:
+    """Mirror the effective realtime config into the metrics snapshot."""
+    metrics["current_jpeg_quality"] = config.get("jpeg_quality")
+    metrics["current_tile_size"] = config.get("tile_size")
+    metrics["current_full_frame_inference"] = config.get("full_frame_inference")
+    metrics["current_target_fps"] = config.get("target_fps")
 
 
 def snapshot_realtime_metrics(metrics: Dict[str, Any]) -> Dict[str, Any]:

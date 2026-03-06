@@ -9,7 +9,12 @@ from backend.core.config import settings
 from backend.core.models import RealtimeConfig, GenerationMode
 from backend.core.exceptions import FileNotFoundError
 from backend.services.file_manager import get_file_manager
-from backend.services.realtime.metrics import create_realtime_metrics, snapshot_realtime_metrics
+from backend.services.realtime.adaptive import initialize_adaptive_state
+from backend.services.realtime.metrics import (
+    create_realtime_metrics,
+    snapshot_realtime_metrics,
+    sync_config_metrics,
+)
 from backend.services.realtime import get_realtime_worker_pool
 
 
@@ -64,6 +69,7 @@ async def create_realtime_session(config: RealtimeConfig):
                    f"Use 'liveportrait' or 'deep_live_cam'."
         )
 
+    fields_set = set(config.model_fields_set)
     normalized_output_resolution = config.output_resolution or config.input_resolution
     config_payload = config.model_copy(
         update={
@@ -72,6 +78,29 @@ async def create_realtime_session(config: RealtimeConfig):
             "allow_frame_drop": config.allow_frame_drop if config.allow_frame_drop is not None else settings.realtime_allow_frame_drop,
             "max_inflight_frames": config.max_inflight_frames or settings.realtime_max_inflight_frames,
             "full_frame_inference": config.full_frame_inference if config.full_frame_inference is not None else settings.realtime_full_frame_inference,
+            "adaptive_quality": config.adaptive_quality if "adaptive_quality" in fields_set else settings.realtime_adaptive_quality,
+            "adaptive_latency_budget_ms": (
+                config.adaptive_latency_budget_ms
+                if "adaptive_latency_budget_ms" in fields_set
+                else settings.realtime_adaptive_latency_budget_ms or None
+            ),
+            "adaptive_jpeg_step": config.adaptive_jpeg_step if "adaptive_jpeg_step" in fields_set else settings.realtime_adaptive_jpeg_step,
+            "adaptive_min_jpeg_quality": (
+                config.adaptive_min_jpeg_quality
+                if "adaptive_min_jpeg_quality" in fields_set
+                else settings.realtime_adaptive_min_jpeg_quality
+            ),
+            "adaptive_cooldown_frames": (
+                config.adaptive_cooldown_frames
+                if "adaptive_cooldown_frames" in fields_set
+                else settings.realtime_adaptive_cooldown_frames
+            ),
+            "adaptive_tile_size": config.adaptive_tile_size if "adaptive_tile_size" in fields_set else settings.realtime_adaptive_tile_size,
+            "adaptive_min_tile_size": (
+                config.adaptive_min_tile_size
+                if "adaptive_min_tile_size" in fields_set
+                else settings.realtime_adaptive_min_tile_size
+            ),
         }
     )
 
@@ -88,6 +117,8 @@ async def create_realtime_session(config: RealtimeConfig):
         "created_at": None,
         "metrics": create_realtime_metrics(),
     }
+    sync_config_metrics(realtime_sessions[session_id]["metrics"], realtime_sessions[session_id]["config"])
+    initialize_adaptive_state(realtime_sessions[session_id])
     try:
         worker_id = await get_realtime_worker_pool().register_session(
             session_id,
@@ -147,7 +178,20 @@ async def get_session_metrics(session_id: str):
         "session_id": session_id,
         "status": session["status"],
         "worker_id": session.get("worker_id"),
+        "config": session["config"],
         "metrics": snapshot_realtime_metrics(session.get("metrics", {})),
+    }
+
+
+@router.get("/realtime/workers")
+async def get_realtime_workers():
+    """Get realtime worker telemetry."""
+    worker_pool = get_realtime_worker_pool()
+    return {
+        "workers": worker_pool.snapshot_worker_stats(),
+        "shared_memory_enabled": settings.realtime_use_shared_memory,
+        "shared_memory_threshold_bytes": settings.realtime_shared_memory_threshold_bytes,
+        "worker_processes": settings.realtime_worker_processes,
     }
 
 

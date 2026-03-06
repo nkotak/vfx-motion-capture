@@ -15,6 +15,7 @@ import api, {
   RealtimeCompatibility,
   RealtimeSession,
   RealtimeSessionMetrics,
+  RealtimeWorkerTelemetry,
 } from '@/services/api';
 
 const RESOLUTION_PRESETS: Array<{ label: string; value: [number, number] }> = [
@@ -37,6 +38,8 @@ export default function RealtimePage() {
   const [jpegQuality, setJpegQuality] = useState(92);
   const [compatibility, setCompatibility] = useState<RealtimeCompatibility | null>(null);
   const [sessionMetrics, setSessionMetrics] = useState<RealtimeSessionMetrics | null>(null);
+  const [workerTelemetry, setWorkerTelemetry] = useState<RealtimeWorkerTelemetry[]>([]);
+  const [showDebugPanel, setShowDebugPanel] = useState(false);
   const processedFrameRef = useRef<string | null>(null);
 
   const updateProcessedFrame = useCallback((nextFrame: string | null) => {
@@ -90,6 +93,17 @@ export default function RealtimePage() {
         const response = await api.getRealtimeSessionMetrics(session.session_id);
         if (!isCancelled) {
           setSessionMetrics(response.metrics);
+          setSession((previous) => (
+            previous && previous.session_id === response.session_id
+              ? {
+                  ...previous,
+                  status: response.status,
+                  worker_id: response.worker_id ?? previous.worker_id,
+                  config: response.config,
+                  metrics: response.metrics,
+                }
+              : previous
+          ));
         }
       } catch (error) {
         if (!isCancelled) {
@@ -106,6 +120,35 @@ export default function RealtimePage() {
       window.clearInterval(intervalId);
     };
   }, [isActive, session?.session_id]);
+
+  useEffect(() => {
+    if (!showDebugPanel || !isActive) {
+      setWorkerTelemetry([]);
+      return;
+    }
+
+    let isCancelled = false;
+    const loadWorkers = async () => {
+      try {
+        const response = await api.getRealtimeWorkers();
+        if (!isCancelled) {
+          setWorkerTelemetry(response.workers);
+        }
+      } catch (error) {
+        if (!isCancelled) {
+          console.error('Failed to load realtime worker telemetry:', error);
+        }
+      }
+    };
+
+    loadWorkers();
+    const intervalId = window.setInterval(loadWorkers, 1000);
+
+    return () => {
+      isCancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [isActive, showDebugPanel]);
 
   const { isConnected, fps, latency, sendFrame, canSendFrame } = useRealtimeWebSocket(
     session?.session_id || null,
@@ -155,6 +198,13 @@ export default function RealtimePage() {
         tile_overlap: 64,
         max_inflight_frames: 1,
         allow_frame_drop: true,
+        adaptive_quality: true,
+        adaptive_latency_budget_ms: Math.round(1000 / targetFps),
+        adaptive_jpeg_step: 5,
+        adaptive_min_jpeg_quality: 75,
+        adaptive_cooldown_frames: 24,
+        adaptive_tile_size: 1024,
+        adaptive_min_tile_size: 512,
       });
 
       setSession(newSession);
@@ -420,6 +470,13 @@ export default function RealtimePage() {
                     Stop
                   </button>
                 )}
+
+                <button
+                  onClick={() => setShowDebugPanel((current) => !current)}
+                  className="btn btn-secondary w-full mt-3"
+                >
+                  {showDebugPanel ? 'Hide debug panel' : 'Show debug panel'}
+                </button>
               </div>
             </div>
 
@@ -440,6 +497,77 @@ export default function RealtimePage() {
                   fps={fps}
                   latency={latency}
                 />
+
+                {showDebugPanel && (
+                  <div className="mt-6 grid grid-cols-1 xl:grid-cols-2 gap-4 text-sm">
+                    <div className="rounded-lg border border-dark-700 bg-dark-800 p-4 space-y-3">
+                      <h3 className="font-medium">Session debug</h3>
+                      <div className="grid grid-cols-2 gap-3 text-dark-300">
+                        <div>Worker latency avg: {sessionMetrics?.avg_worker_latency_ms?.toFixed(1) ?? '0.0'}ms</div>
+                        <div>Total latency avg: {sessionMetrics?.avg_total_latency_ms?.toFixed(1) ?? '0.0'}ms</div>
+                        <div>Decode avg: {sessionMetrics?.avg_decode_ms?.toFixed(1) ?? '0.0'}ms</div>
+                        <div>Inference avg: {sessionMetrics?.avg_inference_ms?.toFixed(1) ?? '0.0'}ms</div>
+                        <div>Encode avg: {sessionMetrics?.avg_encode_ms?.toFixed(1) ?? '0.0'}ms</div>
+                        <div>Resize avg: {sessionMetrics?.avg_resize_ms?.toFixed(1) ?? '0.0'}ms</div>
+                        <div>Processing mode: {sessionMetrics?.current_processing_mode || 'n/a'}</div>
+                        <div>Effective quality: {sessionMetrics?.current_jpeg_quality ?? 'n/a'}</div>
+                        <div>Tile size: {sessionMetrics?.current_tile_size ?? 'off'}</div>
+                        <div>Full-frame: {String(sessionMetrics?.current_full_frame_inference ?? true)}</div>
+                        <div>Shared mem in: {sessionMetrics?.shared_memory_in_count ?? 0}</div>
+                        <div>Shared mem out: {sessionMetrics?.shared_memory_out_count ?? 0}</div>
+                        <div>Inline in: {sessionMetrics?.inline_transport_in_count ?? 0}</div>
+                        <div>Inline out: {sessionMetrics?.inline_transport_out_count ?? 0}</div>
+                      </div>
+
+                      {sessionMetrics?.adaptive_events && sessionMetrics.adaptive_events.length > 0 && (
+                        <div>
+                          <h4 className="font-medium mb-2">Adaptive events</h4>
+                          <div className="space-y-2 max-h-48 overflow-auto">
+                            {sessionMetrics.adaptive_events.slice().reverse().map((event) => (
+                              <div key={`${event.timestamp}-${event.message}`} className="rounded bg-dark-900 px-3 py-2 text-xs text-dark-300">
+                                <div className="text-white">{event.message}</div>
+                                <div className="mt-1 opacity-70">
+                                  {new Date(event.timestamp).toLocaleTimeString()} · quality {event.jpeg_quality ?? 'n/a'} · tile {event.tile_size ?? 'off'}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="rounded-lg border border-dark-700 bg-dark-800 p-4 space-y-3">
+                      <h3 className="font-medium">Worker telemetry</h3>
+                      <div className="space-y-3">
+                        {workerTelemetry.length === 0 ? (
+                          <div className="text-dark-400">No worker telemetry available</div>
+                        ) : workerTelemetry.map((worker) => (
+                          <div key={worker.worker_id} className="rounded bg-dark-900 px-3 py-3 text-xs text-dark-300 space-y-2">
+                            <div className="flex items-center justify-between text-white">
+                              <span>Worker {worker.worker_id}</span>
+                              <span>{worker.process_alive ? 'alive' : 'stopped'}</span>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>Active sessions: {worker.active_sessions}</div>
+                              <div>Saturation: {(worker.saturation * 100).toFixed(0)}%</div>
+                              <div>Pending: {worker.pending_requests}</div>
+                              <div>Processed: {worker.processed_requests}</div>
+                              <div>Input queue: {worker.input_queue_size}</div>
+                              <div>Output queue: {worker.output_queue_size}</div>
+                              <div>Shared mem in: {worker.shared_memory_in_count}</div>
+                              <div>Shared mem out: {worker.shared_memory_out_count}</div>
+                              <div>Latency avg: {worker.avg_latency_ms.toFixed(1)}ms</div>
+                              <div>Errors: {worker.error_count}</div>
+                            </div>
+                            {worker.session_ids.length > 0 && (
+                              <div className="opacity-70">Sessions: {worker.session_ids.join(', ')}</div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {!isActive && !referenceImage && (
                   <div className="mt-6 p-4 bg-dark-800 rounded-lg border border-dark-700">

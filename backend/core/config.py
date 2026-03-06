@@ -108,6 +108,13 @@ class Settings(BaseSettings):
     realtime_full_frame_inference: bool = True
     realtime_tile_size: int = 0
     realtime_tile_overlap: int = 64
+    realtime_adaptive_quality: bool = True
+    realtime_adaptive_latency_budget_ms: int = 0
+    realtime_adaptive_jpeg_step: int = 5
+    realtime_adaptive_min_jpeg_quality: int = 75
+    realtime_adaptive_cooldown_frames: int = 24
+    realtime_adaptive_tile_size: int = 1024
+    realtime_adaptive_min_tile_size: int = 512
 
     # Hardware
     device: str = "auto"  # auto, cuda, cpu, mps

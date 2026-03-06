@@ -94,6 +94,13 @@ export interface RealtimeConfig {
   tile_overlap: number;
   max_inflight_frames: number;
   allow_frame_drop: boolean;
+  adaptive_quality?: boolean;
+  adaptive_latency_budget_ms?: number | null;
+  adaptive_jpeg_step?: number;
+  adaptive_min_jpeg_quality?: number;
+  adaptive_cooldown_frames?: number;
+  adaptive_tile_size?: number | null;
+  adaptive_min_tile_size?: number;
 }
 
 export interface RealtimeSession {
@@ -125,8 +132,61 @@ export interface RealtimeSessionMetrics {
   last_resize_ms: number;
   avg_tile_count: number;
   last_tile_count: number;
+  shared_memory_in_count: number;
+  shared_memory_in_bytes: number;
+  shared_memory_out_count: number;
+  shared_memory_out_bytes: number;
+  inline_transport_in_count: number;
+  inline_transport_in_bytes: number;
+  inline_transport_out_count: number;
+  inline_transport_out_bytes: number;
+  adaptive_adjustment_count: number;
+  adaptive_events?: Array<{
+    timestamp: string;
+    message: string;
+    jpeg_quality?: number | null;
+    tile_size?: number | null;
+    full_frame_inference?: boolean | null;
+    target_fps?: number | null;
+  }>;
+  current_jpeg_quality?: number | null;
+  current_tile_size?: number | null;
+  current_full_frame_inference?: boolean | null;
+  current_target_fps?: number | null;
+  current_processing_mode?: string | null;
   worker_id?: number | null;
   last_updated_at?: string | null;
+}
+
+export interface RealtimeSessionMetricsResponse {
+  session_id: string;
+  status: string;
+  worker_id?: number;
+  config: RealtimeConfig;
+  metrics: RealtimeSessionMetrics;
+}
+
+export interface RealtimeWorkerTelemetry {
+  worker_id: number;
+  pending_requests: number;
+  processed_requests: number;
+  error_count: number;
+  avg_latency_ms: number;
+  last_latency_ms: number;
+  shared_memory_in_count: number;
+  shared_memory_in_bytes: number;
+  shared_memory_out_count: number;
+  shared_memory_out_bytes: number;
+  inline_transport_in_count: number;
+  inline_transport_in_bytes: number;
+  inline_transport_out_count: number;
+  inline_transport_out_bytes: number;
+  input_queue_size: number;
+  output_queue_size: number;
+  active_sessions: number;
+  session_ids: string[];
+  process_alive: boolean;
+  saturation: number;
 }
 
 export interface RealtimeCompatibility {
@@ -340,13 +400,17 @@ class ApiClient {
     return this.request(`/realtime/session/${sessionId}`);
   }
 
-  async getRealtimeSessionMetrics(sessionId: string): Promise<{
-    session_id: string;
-    status: string;
-    worker_id?: number;
-    metrics: RealtimeSessionMetrics;
-  }> {
+  async getRealtimeSessionMetrics(sessionId: string): Promise<RealtimeSessionMetricsResponse> {
     return this.request(`/realtime/session/${sessionId}/metrics`);
+  }
+
+  async getRealtimeWorkers(): Promise<{
+    workers: RealtimeWorkerTelemetry[];
+    shared_memory_enabled: boolean;
+    shared_memory_threshold_bytes: number;
+    worker_processes: number;
+  }> {
+    return this.request('/realtime/workers');
   }
 
   async deleteRealtimeSession(sessionId: string): Promise<void> {
