@@ -3,7 +3,16 @@
  */
 
 import { create } from 'zustand';
-import { api, GenerateRequest, JobResponse, JobProgress, UploadResponse, GenerationMode, QualityPreset } from '@/services/api';
+import {
+  api,
+  GenerateRequest,
+  JobResponse,
+  JobProgress,
+  UploadResponse,
+  GenerationMode,
+  QualityPreset,
+  getFallbackModeInfo,
+} from '@/services/api';
 
 interface GenerationState {
   // Uploads
@@ -96,9 +105,15 @@ export const useGenerationStore = create<GenerationState>((set, get) => ({
 
   startGeneration: async () => {
     const state = get();
+    const modeInfo = getFallbackModeInfo(state.mode);
 
     if (!state.referenceImage) {
       set({ error: 'Please upload a reference image' });
+      return;
+    }
+
+    if (modeInfo.requires_input_video && !state.inputVideo) {
+      set({ error: `${modeInfo.label} requires an input video` });
       return;
     }
 
@@ -107,7 +122,7 @@ export const useGenerationStore = create<GenerationState>((set, get) => ({
     try {
       const request: GenerateRequest = {
         reference_image_id: state.referenceImage.id,
-        input_video_id: state.inputVideo?.id,
+        input_video_id: modeInfo.supports_input_video ? state.inputVideo?.id : undefined,
         prompt: state.prompt,
         mode: state.mode,
         quality: state.quality,

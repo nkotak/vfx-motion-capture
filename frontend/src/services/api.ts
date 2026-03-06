@@ -41,6 +41,91 @@ export type GenerationMode =
 
 export type QualityPreset = 'draft' | 'standard' | 'high' | 'ultra';
 
+export interface GenerationModeInfo {
+  value: GenerationMode;
+  name: string;
+  label: string;
+  description: string;
+  suggested_prompt: string;
+  requires_input_video: boolean;
+  supports_input_video: boolean;
+  supports_prompt: boolean;
+  experimental: boolean;
+}
+
+export const FALLBACK_GENERATION_MODES: GenerationModeInfo[] = [
+  {
+    value: 'auto',
+    name: 'AUTO',
+    label: 'Auto',
+    description: 'Automatically selects the best generation method based on your prompt and inputs.',
+    suggested_prompt: 'Describe what you want to do with the reference image and video',
+    requires_input_video: false,
+    supports_input_video: true,
+    supports_prompt: true,
+    experimental: false,
+  },
+  {
+    value: 'vace_pose_transfer',
+    name: 'VACE_POSE_TRANSFER',
+    label: 'Pose Transfer',
+    description: 'Transfers the motion and poses from the input video to the reference character.',
+    suggested_prompt: 'Replace the person in the video with the person from the reference image',
+    requires_input_video: true,
+    supports_input_video: true,
+    supports_prompt: true,
+    experimental: false,
+  },
+  {
+    value: 'vace_motion_transfer',
+    name: 'VACE_MOTION_TRANSFER',
+    label: 'Motion Transfer',
+    description: 'Applies the movement sequence from a source video to animate your character.',
+    suggested_prompt: 'Make my character dance like in the reference video',
+    requires_input_video: true,
+    supports_input_video: true,
+    supports_prompt: true,
+    experimental: false,
+  },
+  {
+    value: 'wan_r2v',
+    name: 'WAN_R2V',
+    label: 'Reference to Video',
+    description: 'Generates a new video featuring your reference character from a text prompt.',
+    suggested_prompt: 'Generate a video of my character walking through a forest',
+    requires_input_video: false,
+    supports_input_video: false,
+    supports_prompt: true,
+    experimental: false,
+  },
+  {
+    value: 'liveportrait',
+    name: 'LIVEPORTRAIT',
+    label: 'LivePortrait',
+    description: 'Animates a portrait image using facial motion from a driving video.',
+    suggested_prompt: 'Animate this portrait with the expressions from the video',
+    requires_input_video: true,
+    supports_input_video: true,
+    supports_prompt: true,
+    experimental: false,
+  },
+  {
+    value: 'deep_live_cam',
+    name: 'DEEP_LIVE_CAM',
+    label: 'Face Swap',
+    description: 'Replaces faces in the target video with the face from your reference image.',
+    suggested_prompt: 'Swap my face with the character in the video',
+    requires_input_video: true,
+    supports_input_video: true,
+    supports_prompt: true,
+    experimental: false,
+  },
+];
+
+export function getFallbackModeInfo(mode: GenerationMode): GenerationModeInfo {
+  return FALLBACK_GENERATION_MODES.find((entry) => entry.value === mode) ?? FALLBACK_GENERATION_MODES[0];
+}
+
 export type JobStatus =
   | 'pending'
   | 'queued'
@@ -294,20 +379,16 @@ class ApiClient {
     subject: string;
     parameters: Record<string, unknown>;
     confidence: number;
+    cleaned_prompt: string;
     mode_description: string;
   }> {
     return this.request('/generate/parse-prompt', {
       method: 'POST',
-      body: JSON.stringify(prompt),
+      body: JSON.stringify({ prompt }),
     });
   }
 
-  async getModes(): Promise<{ modes: Array<{
-    value: GenerationMode;
-    name: string;
-    description: string;
-    suggested_prompt: string;
-  }> }> {
+  async getModes(): Promise<{ modes: GenerationModeInfo[] }> {
     return this.request('/generate/modes');
   }
 

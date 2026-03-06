@@ -14,7 +14,7 @@ Real-time and offline character motion transfer system built with a Next.js fron
 - **Two realtime renderers**
   - `deep_live_cam`: realtime face swap
   - `liveportrait`: built-in landmark-driven portrait animation fallback, with optional external LivePortrait pipeline support if installed
-- **Offline generation modes** for pose transfer, motion transfer, and Wan-based generation flows
+- **Offline generation modes** for pose transfer, motion transfer, and reference-to-video generation
 
 ## Realtime architecture at a glance
 
@@ -44,9 +44,9 @@ This repo now includes:
 |------|-------------|----------|-------|
 | `liveportrait` | Portrait animation driven by camera facial motion | Yes | Uses a built-in landmark-driven renderer; external LivePortrait integration is optional |
 | `deep_live_cam` | Face swap using a cached source face and high-res aware detection | Yes | Preserves full-resolution output while using bounded analysis sizes |
-| `vace_pose_transfer` | Offline pose transfer | No | Batch generation flow |
-| `vace_motion_transfer` | Offline motion transfer | No | Batch generation flow |
-| `wan_r2v` | Offline reference-to-video generation | No | Highest-cost batch mode |
+| `vace_pose_transfer` | Offline pose transfer | No | Requires a driving video; uses the dedicated VACE renderer path |
+| `vace_motion_transfer` | Offline motion transfer | No | Requires a driving video; produces a stylized motion-driven render |
+| `wan_r2v` | Offline reference-to-video generation | No | Uses a configured Wan model when available, otherwise the built-in reference-video renderer |
 
 ## Hardware guidance
 
@@ -118,8 +118,8 @@ Or use:
 
 Model sources referenced by this repo include:
 
-- [Wan 2.1 VACE](https://huggingface.co/Wan-AI/Wan2.1-VACE-14B)
-- [Wan 2.6 R2V](https://huggingface.co/Wan-AI/Wan2.6-R2V-14B)
+- [Wan 2.1 VACE](https://huggingface.co/Wan-AI/Wan2.1-VACE-14B) (optional external model path for VACE flows)
+- [Wan 2.6 R2V](https://huggingface.co/Wan-AI/Wan2.6-R2V-14B) (optional external model path for `wan_r2v`)
 - [LivePortrait](https://github.com/KwaiVGI/LivePortrait)
 - InsightFace models (downloaded automatically on first use where applicable)
 
@@ -361,6 +361,7 @@ Notable realtime dependency:
 
 - Realtime sessions and metrics are currently stored **in process memory**
 - The built-in LivePortrait path is a real landmark-driven fallback renderer, but not a full external LivePortrait neural pipeline unless that package is installed and integrated successfully
+- The offline Wan and VACE flows now always produce valid outputs, but the built-in renderers are deterministic fallbacks and not a substitute for full external diffusion/video-model quality
 - Frontend type-check currently still has unrelated existing errors in `frontend/src/pages/index.tsx`
 
 ## Troubleshooting
