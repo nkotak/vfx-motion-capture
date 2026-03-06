@@ -94,6 +94,29 @@ class Settings(BaseSettings):
     realtime_fps: int = 30
     realtime_buffer_size: int = 5
     realtime_max_latency_ms: int = 100
+    realtime_default_input_resolution: tuple = (1920, 1080)
+    realtime_default_output_resolution: tuple = (1920, 1080)
+    realtime_default_jpeg_quality: int = 90
+    realtime_default_jpeg_subsampling: str = "420"
+    realtime_binary_transport: bool = True
+    realtime_allow_frame_drop: bool = True
+    realtime_max_inflight_frames: int = 1
+    realtime_worker_processes: int = 2
+    realtime_worker_warmup: bool = True
+    realtime_use_shared_memory: bool = True
+    realtime_shared_memory_threshold_bytes: int = 262144
+    realtime_full_frame_inference: bool = True
+    realtime_tile_size: int = 0
+    realtime_tile_overlap: int = 64
+    realtime_adaptive_quality: bool = True
+    realtime_adaptive_latency_budget_ms: int = 0
+    realtime_adaptive_jpeg_step: int = 5
+    realtime_adaptive_min_jpeg_quality: int = 75
+    realtime_adaptive_cooldown_frames: int = 24
+    realtime_adaptive_tile_size: int = 1024
+    realtime_adaptive_min_tile_size: int = 512
+    realtime_adaptive_fps_step: int = 6
+    realtime_adaptive_min_target_fps: int = 15
 
     # Hardware
     device: str = "auto"  # auto, cuda, cpu, mps

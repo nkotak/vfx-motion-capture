@@ -5,16 +5,19 @@ import {
   FiCamera,
   FiCameraOff,
   FiRefreshCw,
-  FiSettings,
   FiCircle,
 } from 'react-icons/fi';
 import clsx from 'clsx';
 
 interface CameraFeedProps {
-  onFrame?: (frameData: string) => void;
+  onFrame?: (frameData: Blob) => boolean;
+  canSendFrame?: () => boolean;
   processedFrame?: string;
   isActive?: boolean;
   onToggle?: () => void;
+  captureResolution?: [number, number];
+  jpegQuality?: number;
+  targetFps?: number;
   fps?: number;
   latency?: number;
   className?: string;
@@ -22,18 +25,23 @@ interface CameraFeedProps {
 
 export function CameraFeed({
   onFrame,
+  canSendFrame,
   processedFrame,
   isActive = false,
   onToggle,
+  captureResolution = [1920, 1080],
+  jpegQuality = 90,
+  targetFps = 30,
   fps = 0,
   latency = 0,
   className,
 }: CameraFeedProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const processedRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const animationRef = useRef<number | null>(null);
+  const lastCaptureTimeRef = useRef(0);
+  const captureInProgressRef = useRef(false);
 
   const [hasCamera, setHasCamera] = useState(true);
   const [isRecording, setIsRecording] = useState(false);
@@ -51,34 +59,6 @@ export function CameraFeed({
     });
   }, [selectedDevice]);
 
-  // Start camera stream
-  const startCamera = useCallback(async () => {
-    try {
-      const constraints: MediaStreamConstraints = {
-        video: {
-          deviceId: selectedDevice ? { exact: selectedDevice } : undefined,
-          width: { ideal: 640 },
-          height: { ideal: 480 },
-          facingMode: 'user',
-        },
-        audio: false,
-      };
-
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      streamRef.current = stream;
-
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play();
-      }
-
-      setHasCamera(true);
-    } catch (error) {
-      console.error('Failed to start camera:', error);
-      setHasCamera(false);
-    }
-  }, [selectedDevice]);
-
   // Stop camera stream
   const stopCamera = useCallback(() => {
     if (streamRef.current) {
@@ -90,28 +70,97 @@ export function CameraFeed({
       cancelAnimationFrame(animationRef.current);
       animationRef.current = null;
     }
+
+    captureInProgressRef.current = false;
   }, []);
 
   // Frame capture loop
-  const captureFrame = useCallback(() => {
+  const captureFrame = useCallback((now: number) => {
     if (!videoRef.current || !canvasRef.current || !isActive) return;
 
     const video = videoRef.current;
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
+    const frameInterval = 1000 / Math.max(targetFps, 1);
 
     if (!ctx) return;
+    if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+      animationRef.current = requestAnimationFrame(captureFrame);
+      return;
+    }
 
-    canvas.width = video.videoWidth || 640;
-    canvas.height = video.videoHeight || 480;
+    if (captureInProgressRef.current || now - lastCaptureTimeRef.current < frameInterval) {
+      animationRef.current = requestAnimationFrame(captureFrame);
+      return;
+    }
 
-    ctx.drawImage(video, 0, 0);
+    if (canSendFrame && !canSendFrame()) {
+      animationRef.current = requestAnimationFrame(captureFrame);
+      return;
+    }
 
-    const frameData = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
-    onFrame?.(frameData);
+    const width = video.videoWidth || 640;
+    const height = video.videoHeight || 480;
 
-    animationRef.current = requestAnimationFrame(captureFrame);
-  }, [isActive, onFrame]);
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+
+    ctx.drawImage(video, 0, 0, width, height);
+
+    captureInProgressRef.current = true;
+    canvas.toBlob((blob) => {
+      if (blob && (!canSendFrame || canSendFrame())) {
+        const accepted = onFrame?.(blob) ?? false;
+        if (accepted) {
+          lastCaptureTimeRef.current = performance.now();
+        }
+      }
+
+      captureInProgressRef.current = false;
+      if (isActive) {
+        animationRef.current = requestAnimationFrame(captureFrame);
+      }
+    }, 'image/jpeg', Math.max(0.5, Math.min(jpegQuality, 100)) / 100);
+  }, [canSendFrame, isActive, jpegQuality, onFrame, targetFps]);
+
+  // Start camera stream
+  const startCamera = useCallback(async () => {
+    try {
+      const constraints: MediaStreamConstraints = {
+        video: {
+          deviceId: selectedDevice ? { exact: selectedDevice } : undefined,
+          width: { ideal: captureResolution[0] },
+          height: { ideal: captureResolution[1] },
+          frameRate: { ideal: targetFps, max: Math.max(targetFps, 30) },
+          facingMode: 'user',
+        },
+        audio: false,
+      };
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      streamRef.current = stream;
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+
+        if (isActive) {
+          lastCaptureTimeRef.current = 0;
+          if (animationRef.current) {
+            cancelAnimationFrame(animationRef.current);
+          }
+          animationRef.current = requestAnimationFrame(captureFrame);
+        }
+      }
+
+      setHasCamera(true);
+    } catch (error) {
+      console.error('Failed to start camera:', error);
+      setHasCamera(false);
+    }
+  }, [captureFrame, captureResolution, isActive, selectedDevice, targetFps]);
 
   // Handle activation
   useEffect(() => {
@@ -125,36 +174,6 @@ export function CameraFeed({
       stopCamera();
     };
   }, [isActive, startCamera, stopCamera]);
-
-  // Start frame capture when active
-  useEffect(() => {
-    if (isActive && streamRef.current) {
-      animationRef.current = requestAnimationFrame(captureFrame);
-    }
-
-    return () => {
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [isActive, captureFrame]);
-
-  // Draw processed frame
-  useEffect(() => {
-    if (!processedFrame || !processedRef.current) return;
-
-    const canvas = processedRef.current;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const img = new Image();
-    img.onload = () => {
-      canvas.width = img.width;
-      canvas.height = img.height;
-      ctx.drawImage(img, 0, 0);
-    };
-    img.src = `data:image/jpeg;base64,${processedFrame}`;
-  }, [processedFrame]);
 
   return (
     <div className={clsx('relative', className)}>
@@ -174,8 +193,9 @@ export function CameraFeed({
             />
 
             {/* Processed output */}
-            <canvas
-              ref={processedRef}
+            <img
+              src={processedFrame}
+              alt="Processed camera output"
               className={clsx(
                 'w-full h-full object-cover',
                 processedFrame ? 'block' : 'hidden'

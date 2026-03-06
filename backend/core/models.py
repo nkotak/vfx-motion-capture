@@ -157,6 +157,125 @@ class RealtimeConfig(BaseModel):
         default=True,
         description="Apply face enhancement"
     )
+    input_resolution: tuple[int, int] = Field(
+        default=(1920, 1080),
+        description="Target camera capture resolution (width, height)"
+    )
+    output_resolution: tuple[int, int] = Field(
+        default=(1920, 1080),
+        description="Target processed frame resolution (width, height)"
+    )
+    jpeg_quality: int = Field(
+        default=90,
+        ge=50,
+        le=100,
+        description="JPEG quality used for realtime transport"
+    )
+    jpeg_subsampling: str = Field(
+        default="420",
+        description="JPEG chroma subsampling mode (444, 422, 420, gray)"
+    )
+    binary_transport: bool = Field(
+        default=True,
+        description="Use binary websocket frames instead of base64 JSON"
+    )
+    full_frame_inference: bool = Field(
+        default=True,
+        description="Keep the full frame at the requested output resolution during processing"
+    )
+    tile_size: Optional[int] = Field(
+        default=None,
+        ge=0,
+        le=4096,
+        description="Optional tile size for future full-frame tiled inference"
+    )
+    tile_overlap: int = Field(
+        default=64,
+        ge=0,
+        le=512,
+        description="Tile overlap in pixels for future tiled inference"
+    )
+    max_inflight_frames: int = Field(
+        default=1,
+        ge=1,
+        le=4,
+        description="Maximum number of inflight realtime frames per session"
+    )
+    allow_frame_drop: bool = Field(
+        default=True,
+        description="Drop stale frames when the realtime pipeline falls behind"
+    )
+    adaptive_quality: bool = Field(
+        default=True,
+        description="Allow the backend to adapt realtime quality settings when latency drifts high"
+    )
+    adaptive_latency_budget_ms: Optional[int] = Field(
+        default=None,
+        ge=0,
+        le=5000,
+        description="Latency budget before adaptive degradation starts; defaults to frame budget when unset"
+    )
+    adaptive_jpeg_step: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="JPEG quality step used by the adaptive controller"
+    )
+    adaptive_min_jpeg_quality: int = Field(
+        default=75,
+        ge=50,
+        le=100,
+        description="Lower bound for adaptive JPEG quality"
+    )
+    adaptive_cooldown_frames: int = Field(
+        default=24,
+        ge=1,
+        le=600,
+        description="Frames to wait between adaptive quality adjustments"
+    )
+    adaptive_tile_size: Optional[int] = Field(
+        default=1024,
+        ge=0,
+        le=4096,
+        description="Tile size to enable when adaptive mode needs a lower-latency full-frame path"
+    )
+    adaptive_min_tile_size: int = Field(
+        default=512,
+        ge=128,
+        le=4096,
+        description="Smallest tile size adaptive mode will use when degrading quality"
+    )
+    adaptive_fps_step: int = Field(
+        default=6,
+        ge=1,
+        le=30,
+        description="FPS reduction step used by the adaptive controller"
+    )
+    adaptive_min_target_fps: int = Field(
+        default=15,
+        ge=1,
+        le=60,
+        description="Lower bound for adaptive target FPS"
+    )
+
+    @field_validator("input_resolution", "output_resolution", mode="before")
+    @classmethod
+    def parse_realtime_resolution(cls, v):
+        if isinstance(v, (list, tuple)) and len(v) == 2:
+            return tuple(v)
+        if isinstance(v, str):
+            parts = v.lower().replace("x", ",").split(",")
+            if len(parts) == 2:
+                return (int(parts[0]), int(parts[1]))
+        raise ValueError("Resolution must be (width, height) tuple")
+
+    @field_validator("jpeg_subsampling")
+    @classmethod
+    def validate_jpeg_subsampling(cls, v):
+        normalized = v.lower()
+        if normalized not in {"444", "422", "420", "gray"}:
+            raise ValueError("jpeg_subsampling must be one of: 444, 422, 420, gray")
+        return normalized
 
 
 class UploadResponse(BaseModel):

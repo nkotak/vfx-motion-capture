@@ -9,7 +9,7 @@ import numpy as np
 import insightface
 from loguru import logger
 from backend.core.config import settings
-from backend.services.face_detector import get_face_detector
+from backend.services.face_detector import DetectedFace, get_face_detector
 from backend.services.model_manager import get_model_manager
 
 class FaceSwapper:
@@ -29,6 +29,27 @@ class FaceSwapper:
         # Cache for source face to avoid redundant detection in real-time processing
         self._cached_source_face = None
         self._cached_source_hash = None
+        self._realtime_detection_max_size = 512
+
+    def _select_detection_max_size(self, target_img: np.ndarray, realtime_config: dict | None) -> int:
+        """Choose a bounded high-res analysis size for target face detection."""
+        if not realtime_config:
+            return self._realtime_detection_max_size
+
+        output_resolution = realtime_config.get("output_resolution") or (
+            target_img.shape[1],
+            target_img.shape[0],
+        )
+        max_output_dim = max(output_resolution)
+
+        if realtime_config.get("full_frame_inference", True):
+            if max_output_dim >= 3840:
+                return 1920
+            if max_output_dim >= 2560:
+                return 1536
+            if max_output_dim >= 1920:
+                return 1280
+        return self._realtime_detection_max_size
         
     def _load_swapper(self):
         """Load the inswapper model via ModelManager."""
@@ -101,7 +122,85 @@ class FaceSwapper:
         self._cached_source_hash = current_hash
         return source_face
 
-    async def swap_face(self, source_img: np.ndarray, target_img: np.ndarray) -> np.ndarray:
+    def _resize_for_realtime_detection(
+        self,
+        image: np.ndarray,
+        max_detection_size: int | None = None,
+    ) -> tuple[np.ndarray, float]:
+        """Downscale target frames before detection to keep realtime latency low."""
+        height, width = image.shape[:2]
+        max_dim = max(height, width)
+        detection_limit = max_detection_size or self._realtime_detection_max_size
+        if max_dim <= detection_limit:
+            return image, 1.0
+
+        scale = detection_limit / float(max_dim)
+        resized = cv2.resize(
+            image,
+            (max(1, int(width * scale)), max(1, int(height * scale))),
+            interpolation=cv2.INTER_AREA,
+        )
+        return resized, scale
+
+    def _restore_detected_face_scale(self, face: DetectedFace, scale: float) -> DetectedFace:
+        """Map face detection results from the resized frame back to the source frame."""
+        if scale == 1.0:
+            return face
+
+        inverse_scale = 1.0 / scale
+        bbox = tuple(float(coord * inverse_scale) for coord in face.bbox)
+        landmarks = face.landmarks.astype(np.float32) * inverse_scale
+        return DetectedFace(
+            bbox=bbox,
+            landmarks=landmarks,
+            confidence=face.confidence,
+            embedding=face.embedding,
+            age=face.age,
+            gender=face.gender,
+            aligned_face=face.aligned_face,
+        )
+
+    def _apply_highres_face_detail(
+        self,
+        image: np.ndarray,
+        target_face: DetectedFace,
+        realtime_config: dict | None,
+    ) -> np.ndarray:
+        """Enhance the swapped face ROI when preserving a high-resolution output."""
+        if not realtime_config or not realtime_config.get("full_frame_inference", True):
+            return image
+
+        output_resolution = realtime_config.get("output_resolution") or (image.shape[1], image.shape[0])
+        if max(output_resolution) < 1920:
+            return image
+
+        x1, y1, x2, y2 = [int(v) for v in target_face.bbox]
+        width = max(1, x2 - x1)
+        height = max(1, y2 - y1)
+        pad_x = max(8, int(width * 0.15))
+        pad_y = max(8, int(height * 0.15))
+        roi_x1 = max(0, x1 - pad_x)
+        roi_y1 = max(0, y1 - pad_y)
+        roi_x2 = min(image.shape[1], x2 + pad_x)
+        roi_y2 = min(image.shape[0], y2 + pad_y)
+
+        roi = image[roi_y1:roi_y2, roi_x1:roi_x2]
+        if roi.size == 0:
+            return image
+
+        blurred = cv2.GaussianBlur(roi, (0, 0), sigmaX=1.2)
+        sharpened = cv2.addWeighted(roi, 1.18, blurred, -0.18, 0)
+
+        output = image.copy()
+        output[roi_y1:roi_y2, roi_x1:roi_x2] = sharpened
+        return output
+
+    async def swap_face(
+        self,
+        source_img: np.ndarray,
+        target_img: np.ndarray,
+        realtime_config: dict | None = None,
+    ) -> np.ndarray:
         """
         Swap face from source_img into target_img.
         """
@@ -114,8 +213,16 @@ class FaceSwapper:
             logger.warning(f"Could not find source face: {e}")
             return target_img
 
-        # 2. Detect target faces
-        target_faces = await self.face_detector.detect_faces(target_img)
+        # 2. Detect the primary target face using a high-res aware analysis image.
+        detection_image, detection_scale = self._resize_for_realtime_detection(
+            target_img,
+            max_detection_size=self._select_detection_max_size(target_img, realtime_config),
+        )
+        target_faces = await self.face_detector.detect_faces(
+            detection_image,
+            max_faces=1,
+            extract_embedding=False,
+        )
         if not target_faces:
             return target_img
             
@@ -124,7 +231,7 @@ class FaceSwapper:
         
         # In a real app, you might select which target face to swap
         # For now, swap the largest one (primary)
-        target_face = target_faces[0]
+        target_face = self._restore_detected_face_scale(target_faces[0], detection_scale)
         
         # InsightFace's swapper expects raw face objects, but our detector wraps them.
         # However, the swapper mainly needs the kps (landmarks) and the source embedding.
@@ -150,6 +257,7 @@ class FaceSwapper:
         sf_obj.normed_embedding = source_face.embedding / np.linalg.norm(source_face.embedding)
         
         result_img = swapper.get(result_img, tf_obj, sf_obj, paste_back=True)
+        result_img = self._apply_highres_face_detail(result_img, target_face, realtime_config)
         
         return result_img
 

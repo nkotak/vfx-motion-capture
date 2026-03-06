@@ -84,6 +84,25 @@ export interface RealtimeConfig {
   face_only: boolean;
   smoothing: number;
   enhance_face: boolean;
+  input_resolution: [number, number];
+  output_resolution: [number, number];
+  jpeg_quality: number;
+  jpeg_subsampling: '444' | '422' | '420' | 'gray';
+  binary_transport: boolean;
+  full_frame_inference: boolean;
+  tile_size?: number | null;
+  tile_overlap: number;
+  max_inflight_frames: number;
+  allow_frame_drop: boolean;
+  adaptive_quality?: boolean;
+  adaptive_latency_budget_ms?: number | null;
+  adaptive_jpeg_step?: number;
+  adaptive_min_jpeg_quality?: number;
+  adaptive_cooldown_frames?: number;
+  adaptive_tile_size?: number | null;
+  adaptive_min_tile_size?: number;
+  adaptive_fps_step?: number;
+  adaptive_min_target_fps?: number;
 }
 
 export interface RealtimeSession {
@@ -91,6 +110,104 @@ export interface RealtimeSession {
   websocket_url: string;
   config: RealtimeConfig;
   status: string;
+  worker_id?: number;
+  metrics?: RealtimeSessionMetrics;
+}
+
+export interface RealtimeSessionMetrics {
+  received_frames: number;
+  processed_frames: number;
+  dropped_frames: number;
+  bytes_in: number;
+  bytes_out: number;
+  avg_worker_latency_ms: number;
+  last_worker_latency_ms: number;
+  avg_total_latency_ms: number;
+  last_total_latency_ms: number;
+  avg_decode_ms: number;
+  last_decode_ms: number;
+  avg_inference_ms: number;
+  last_inference_ms: number;
+  avg_encode_ms: number;
+  last_encode_ms: number;
+  avg_resize_ms: number;
+  last_resize_ms: number;
+  avg_tile_count: number;
+  last_tile_count: number;
+  shared_memory_in_count: number;
+  shared_memory_in_bytes: number;
+  shared_memory_out_count: number;
+  shared_memory_out_bytes: number;
+  inline_transport_in_count: number;
+  inline_transport_in_bytes: number;
+  inline_transport_out_count: number;
+  inline_transport_out_bytes: number;
+  adaptive_adjustment_count: number;
+  adaptive_events?: Array<{
+    timestamp: string;
+    message: string;
+    jpeg_quality?: number | null;
+    tile_size?: number | null;
+    full_frame_inference?: boolean | null;
+    target_fps?: number | null;
+  }>;
+  current_jpeg_quality?: number | null;
+  current_tile_size?: number | null;
+  current_full_frame_inference?: boolean | null;
+  current_target_fps?: number | null;
+  current_processing_mode?: string | null;
+  worker_id?: number | null;
+  last_updated_at?: string | null;
+}
+
+export interface RealtimeSessionMetricsResponse {
+  session_id: string;
+  status: string;
+  worker_id?: number;
+  config: RealtimeConfig;
+  metrics: RealtimeSessionMetrics;
+}
+
+export interface RealtimeWorkerTelemetry {
+  worker_id: number;
+  pending_requests: number;
+  inflight_queue_depth: number;
+  processed_requests: number;
+  error_count: number;
+  avg_latency_ms: number;
+  last_latency_ms: number;
+  shared_memory_in_count: number;
+  shared_memory_in_bytes: number;
+  shared_memory_out_count: number;
+  shared_memory_out_bytes: number;
+  inline_transport_in_count: number;
+  inline_transport_in_bytes: number;
+  inline_transport_out_count: number;
+  inline_transport_out_bytes: number;
+  input_queue_size: number;
+  output_queue_size: number;
+  active_sessions: number;
+  session_ids: string[];
+  process_alive: boolean;
+  saturation: number;
+}
+
+export interface RealtimeCompatibility {
+  gpu_available: boolean;
+  gpu_name?: string;
+  gpu_memory_gb?: number;
+  capability: string;
+  estimated_fps: number;
+  runtime?: 'cpu' | 'cuda' | 'mps';
+  recommended_session?: {
+    input_resolution: [number, number];
+    output_resolution: [number, number];
+    target_fps: number;
+    jpeg_quality: number;
+    worker_processes: number;
+    full_frame_inference: boolean;
+  };
+  recommended_mode?: GenerationMode;
 }
 
 class ApiClient {
@@ -286,20 +403,26 @@ class ApiClient {
     return this.request(`/realtime/session/${sessionId}`);
   }
 
+  async getRealtimeSessionMetrics(sessionId: string): Promise<RealtimeSessionMetricsResponse> {
+    return this.request(`/realtime/session/${sessionId}/metrics`);
+  }
+
+  async getRealtimeWorkers(): Promise<{
+    workers: RealtimeWorkerTelemetry[];
+    shared_memory_enabled: boolean;
+    shared_memory_threshold_bytes: number;
+    worker_processes: number;
+  }> {
+    return this.request('/realtime/workers');
+  }
+
   async deleteRealtimeSession(sessionId: string): Promise<void> {
     return this.request(`/realtime/session/${sessionId}`, {
       method: 'DELETE',
     });
   }
 
-  async checkRealtimeCompatibility(): Promise<{
-    gpu_available: boolean;
-    gpu_name?: string;
-    gpu_memory_gb?: number;
-    capability: string;
-    estimated_fps: number;
-    recommended_mode?: GenerationMode;
-  }> {
+  async checkRealtimeCompatibility(): Promise<RealtimeCompatibility> {
     return this.request('/realtime/check-compatibility');
   }
 

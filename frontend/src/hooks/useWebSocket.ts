@@ -156,7 +156,7 @@ export function useJobWebSocket(jobId: string | null, options: UseWebSocketOptio
 export function useRealtimeWebSocket(
   sessionId: string | null,
   options: {
-    onFrame?: (frameData: string, latency: number) => void;
+    onFrame?: (frameUrl: string, latency: number) => void;
     onError?: (error: string) => void;
   } = {}
 ) {
@@ -167,8 +167,37 @@ export function useRealtimeWebSocket(
 
   const frameCountRef = useRef(0);
   const lastSecondRef = useRef(Date.now());
+  const frameInFlightRef = useRef(false);
+  const lastFrameSentAtRef = useRef<number | null>(null);
 
   const { onFrame, onError } = options;
+
+  const handleFrameResult = useCallback((frameUrl: string, reportedLatency?: number) => {
+    const measuredLatency = lastFrameSentAtRef.current !== null
+      ? performance.now() - lastFrameSentAtRef.current
+      : 0;
+    const nextLatency = reportedLatency ?? measuredLatency;
+
+    frameInFlightRef.current = false;
+    lastFrameSentAtRef.current = null;
+
+    onFrame?.(frameUrl, nextLatency);
+    setLatency(nextLatency);
+
+    frameCountRef.current++;
+    const now = Date.now();
+    if (now - lastSecondRef.current >= 1000) {
+      setFps(frameCountRef.current);
+      frameCountRef.current = 0;
+      lastSecondRef.current = now;
+    }
+  }, [onFrame]);
+
+  const canSendFrame = useCallback(() => (
+    wsRef.current?.readyState === WebSocket.OPEN
+    && !frameInFlightRef.current
+    && wsRef.current.bufferedAmount < 1_000_000
+  ), []);
 
   const connect = useCallback(() => {
     if (!sessionId) return;
@@ -178,42 +207,60 @@ export function useRealtimeWebSocket(
 
     try {
       const ws = new WebSocket(wsUrl);
+      ws.binaryType = 'blob';
 
       ws.onopen = () => {
         setIsConnected(true);
         frameCountRef.current = 0;
         lastSecondRef.current = Date.now();
+        frameInFlightRef.current = false;
+        lastFrameSentAtRef.current = null;
       };
 
       ws.onmessage = (event) => {
         try {
-          const message = JSON.parse(event.data);
+          if (typeof event.data === 'string') {
+            const message = JSON.parse(event.data);
 
-          if (message.type === 'result') {
-            onFrame?.(message.data, message.latency_ms);
-            setLatency(message.latency_ms);
-
-            // Calculate FPS
-            frameCountRef.current++;
-            const now = Date.now();
-            if (now - lastSecondRef.current >= 1000) {
-              setFps(frameCountRef.current);
-              frameCountRef.current = 0;
-              lastSecondRef.current = now;
+            if (message.type === 'result' && typeof message.data === 'string') {
+              handleFrameResult(
+                `data:image/jpeg;base64,${message.data}`,
+                typeof message.latency_ms === 'number' ? message.latency_ms : undefined
+              );
+            } else if (message.type === 'error') {
+              frameInFlightRef.current = false;
+              lastFrameSentAtRef.current = null;
+              onError?.(message.message);
             }
-          } else if (message.type === 'error') {
-            onError?.(message.message);
+            return;
+          }
+
+          if (event.data instanceof Blob) {
+            const frameUrl = URL.createObjectURL(event.data);
+            if (onFrame) {
+              handleFrameResult(frameUrl);
+            } else {
+              URL.revokeObjectURL(frameUrl);
+              frameInFlightRef.current = false;
+              lastFrameSentAtRef.current = null;
+            }
           }
         } catch (e) {
           console.error('Failed to parse message:', e);
+          frameInFlightRef.current = false;
+          lastFrameSentAtRef.current = null;
         }
       };
 
       ws.onclose = () => {
         setIsConnected(false);
+        frameInFlightRef.current = false;
+        lastFrameSentAtRef.current = null;
       };
 
       ws.onerror = () => {
+        frameInFlightRef.current = false;
+        lastFrameSentAtRef.current = null;
         onError?.('WebSocket error');
       };
 
@@ -225,22 +272,27 @@ export function useRealtimeWebSocket(
 
   const disconnect = useCallback(() => {
     if (wsRef.current) {
-      wsRef.current.send(JSON.stringify({ type: 'stop' }));
+      if (wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: 'stop' }));
+      }
       wsRef.current.close();
       wsRef.current = null;
     }
+    frameInFlightRef.current = false;
+    lastFrameSentAtRef.current = null;
     setIsConnected(false);
   }, []);
 
-  const sendFrame = useCallback((frameData: string) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({
-        type: 'frame',
-        data: frameData,
-        timestamp: Date.now(),
-      }));
+  const sendFrame = useCallback((frameData: Blob) => {
+    if (!canSendFrame() || !wsRef.current) {
+      return false;
     }
-  }, []);
+
+    frameInFlightRef.current = true;
+    lastFrameSentAtRef.current = performance.now();
+    wsRef.current.send(frameData);
+    return true;
+  }, [canSendFrame]);
 
   useEffect(() => {
     if (sessionId) {
@@ -259,6 +311,7 @@ export function useRealtimeWebSocket(
     fps,
     latency,
     sendFrame,
+    canSendFrame,
     connect,
     disconnect,
   };
