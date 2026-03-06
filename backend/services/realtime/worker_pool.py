@@ -73,6 +73,24 @@ def _worker_process_main(
                         "worker_id": worker_id,
                     })
 
+                elif task_type == "update_session_config":
+                    session_id = task["session_id"]
+                    if session_id not in sessions:
+                        raise KeyError(f"Unknown realtime session: {session_id}")
+
+                    updated_config = dict(task["config"])
+                    sessions[session_id]["config"] = updated_config
+                    processor = processors.get(session_id)
+                    if processor is not None:
+                        # Keep processor-local config references aligned.
+                        processor["config"] = updated_config
+
+                    output_queue.put({
+                        "type": "session_config_updated",
+                        "request_id": request_id,
+                        "worker_id": worker_id,
+                    })
+
                 elif task_type == "process_frame":
                     session_id = task["session_id"]
                     if session_id not in processors:
@@ -288,6 +306,22 @@ class RealtimeWorkerPool:
         worker.active_sessions.add(session_id)
         self._session_workers[session_id] = worker.worker_id
         return worker.worker_id
+
+    async def update_session_config(self, session_id: str, config: Dict[str, Any]) -> None:
+        """Push updated session config into the assigned worker process."""
+        worker_id = self._session_workers.get(session_id)
+        if worker_id is None:
+            raise KeyError(f"Realtime session is not registered: {session_id}")
+
+        await self._dispatch(
+            worker_id,
+            {
+                "type": "update_session_config",
+                "session_id": session_id,
+                "config": dict(config),
+            },
+            timeout=30.0,
+        )
 
     async def close_session(self, session_id: str) -> None:
         """Release a session from its assigned worker."""
