@@ -73,7 +73,7 @@ def _worker_process_main(
                         raise KeyError(f"Unknown realtime session: {session_id}")
 
                     start_time = time.perf_counter()
-                    frame_bytes = loop.run_until_complete(
+                    result = loop.run_until_complete(
                         process_frame(
                             processors[session_id],
                             task["frame_data"],
@@ -84,7 +84,8 @@ def _worker_process_main(
                         "type": "frame_result",
                         "request_id": request_id,
                         "worker_id": worker_id,
-                        "frame_data": frame_bytes,
+                        "frame_data": result["frame_data"],
+                        "metrics": result.get("metrics", {}),
                         "latency_ms": (time.perf_counter() - start_time) * 1000,
                     })
 
@@ -271,6 +272,7 @@ class RealtimeWorkerPool:
         return {
             "frame_data": message["frame_data"],
             "latency_ms": message.get("latency_ms", 0.0),
+            "metrics": message.get("metrics", {}),
             "worker_id": worker_id,
         }
 

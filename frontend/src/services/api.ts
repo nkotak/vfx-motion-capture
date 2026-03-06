@@ -102,6 +102,31 @@ export interface RealtimeSession {
   config: RealtimeConfig;
   status: string;
   worker_id?: number;
+  metrics?: RealtimeSessionMetrics;
+}
+
+export interface RealtimeSessionMetrics {
+  received_frames: number;
+  processed_frames: number;
+  dropped_frames: number;
+  bytes_in: number;
+  bytes_out: number;
+  avg_worker_latency_ms: number;
+  last_worker_latency_ms: number;
+  avg_total_latency_ms: number;
+  last_total_latency_ms: number;
+  avg_decode_ms: number;
+  last_decode_ms: number;
+  avg_inference_ms: number;
+  last_inference_ms: number;
+  avg_encode_ms: number;
+  last_encode_ms: number;
+  avg_resize_ms: number;
+  last_resize_ms: number;
+  avg_tile_count: number;
+  last_tile_count: number;
+  worker_id?: number | null;
+  last_updated_at?: string | null;
 }
 
 class ApiClient {
@@ -297,6 +322,15 @@ class ApiClient {
     return this.request(`/realtime/session/${sessionId}`);
   }
 
+  async getRealtimeSessionMetrics(sessionId: string): Promise<{
+    session_id: string;
+    status: string;
+    worker_id?: number;
+    metrics: RealtimeSessionMetrics;
+  }> {
+    return this.request(`/realtime/session/${sessionId}/metrics`);
+  }
+
   async deleteRealtimeSession(sessionId: string): Promise<void> {
     return this.request(`/realtime/session/${sessionId}`, {
       method: 'DELETE',
@@ -310,6 +344,14 @@ class ApiClient {
     capability: string;
     estimated_fps: number;
     runtime?: 'cpu' | 'cuda' | 'mps';
+    recommended_session?: {
+      input_resolution: [number, number];
+      output_resolution: [number, number];
+      target_fps: number;
+      jpeg_quality: number;
+      worker_processes: number;
+      full_frame_inference: boolean;
+    };
     recommended_mode?: GenerationMode;
   }> {
     return this.request('/realtime/check-compatibility');

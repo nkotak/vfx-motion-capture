@@ -9,6 +9,7 @@ from backend.core.config import settings
 from backend.core.models import RealtimeConfig, GenerationMode
 from backend.core.exceptions import FileNotFoundError
 from backend.services.file_manager import get_file_manager
+from backend.services.realtime.metrics import create_realtime_metrics, snapshot_realtime_metrics
 from backend.services.realtime import get_realtime_worker_pool
 
 
@@ -85,6 +86,7 @@ async def create_realtime_session(config: RealtimeConfig):
         "reference_path": str(ref_image.path),
         "status": "ready",
         "created_at": None,
+        "metrics": create_realtime_metrics(),
     }
     try:
         worker_id = await get_realtime_worker_pool().register_session(
@@ -92,6 +94,7 @@ async def create_realtime_session(config: RealtimeConfig):
             realtime_sessions[session_id],
         )
         realtime_sessions[session_id]["worker_id"] = worker_id
+        realtime_sessions[session_id]["metrics"]["worker_id"] = worker_id
     except Exception as exc:
         realtime_sessions.pop(session_id, None)
         logger.error(f"Failed to initialize realtime session worker: {exc}")
@@ -105,6 +108,7 @@ async def create_realtime_session(config: RealtimeConfig):
         "config": config_payload.model_dump(),
         "status": "ready",
         "worker_id": worker_id,
+        "metrics": snapshot_realtime_metrics(realtime_sessions[session_id]["metrics"]),
     }
 
 
@@ -126,6 +130,24 @@ async def get_session_info(session_id: str):
         "status": session["status"],
         "websocket_url": f"/ws/realtime/{session_id}",
         "worker_id": session.get("worker_id"),
+        "metrics": snapshot_realtime_metrics(session.get("metrics", {})),
+    }
+
+
+@router.get("/realtime/session/{session_id}/metrics")
+async def get_session_metrics(session_id: str):
+    """Get aggregated metrics for a realtime session."""
+    from backend.api.websocket import realtime_sessions
+
+    if session_id not in realtime_sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session = realtime_sessions[session_id]
+    return {
+        "session_id": session_id,
+        "status": session["status"],
+        "worker_id": session.get("worker_id"),
+        "metrics": snapshot_realtime_metrics(session.get("metrics", {})),
     }
 
 
@@ -199,6 +221,7 @@ async def check_compatibility():
     # Estimate capability
     capability = "none"
     estimated_fps = 0
+    recommended_session = None
 
     if gpu_available and gpu_memory:
         if gpu_memory >= 24:
@@ -216,6 +239,33 @@ async def check_compatibility():
     elif mps_available:
         capability = "good"
         estimated_fps = 24
+        recommended_session = {
+            "input_resolution": (1920, 1080),
+            "output_resolution": (1920, 1080),
+            "target_fps": 24,
+            "jpeg_quality": 92,
+            "worker_processes": settings.realtime_worker_processes,
+            "full_frame_inference": True,
+        }
+
+    if recommended_session is None and capability in {"excellent", "good"}:
+        recommended_session = {
+            "input_resolution": (1920, 1080),
+            "output_resolution": (1920, 1080),
+            "target_fps": 30 if capability == "excellent" else 24,
+            "jpeg_quality": 90,
+            "worker_processes": settings.realtime_worker_processes,
+            "full_frame_inference": True,
+        }
+    elif recommended_session is None and capability == "moderate":
+        recommended_session = {
+            "input_resolution": (1280, 720),
+            "output_resolution": (1280, 720),
+            "target_fps": 20,
+            "jpeg_quality": 88,
+            "worker_processes": 1,
+            "full_frame_inference": False,
+        }
 
     return {
         "gpu_available": gpu_available or mps_available,
@@ -224,6 +274,7 @@ async def check_compatibility():
         "capability": capability,
         "estimated_fps": estimated_fps,
         "runtime": runtime,
+        "recommended_session": recommended_session,
         "recommended_mode": (
             GenerationMode.LIVEPORTRAIT.value if capability in ["excellent", "good"]
             else GenerationMode.DEEP_LIVE_CAM.value if capability == "moderate"

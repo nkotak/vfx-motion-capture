@@ -12,6 +12,7 @@ from loguru import logger
 
 from backend.core.models import JobStatus, JobProgress
 from backend.services.job_manager import get_job_manager
+from backend.services.realtime.metrics import record_dropped, record_processed, record_received
 from backend.services.realtime import get_realtime_worker_pool
 
 
@@ -173,42 +174,137 @@ async def realtime_processing_websocket(websocket: WebSocket, session_id: str):
     session["status"] = "active"
     session["created_at"] = datetime.utcnow()
 
-    frame_count = 0
-    total_latency = 0
+    metrics = session.setdefault("metrics", {})
+    allow_frame_drop = bool(session["config"].get("allow_frame_drop", True))
+    max_inflight_frames = max(1, int(session["config"].get("max_inflight_frames", 1)))
+    frame_buffer: list[tuple[bytes, float]] = []
+    frame_lock = asyncio.Lock()
+    frame_ready = asyncio.Event()
+    stop_event = asyncio.Event()
+    send_lock = asyncio.Lock()
+    loop = asyncio.get_running_loop()
+    receiver_task: asyncio.Task | None = None
+    processor_task: asyncio.Task | None = None
 
-    try:
-        await websocket.send_json({
-            "type": "connected",
-            "session_id": session_id,
-            "worker_id": session.get("worker_id"),
-            "config": session["config"],
-        })
+    async def send_json_safe(payload: Dict[str, Any]) -> None:
+        async with send_lock:
+            await websocket.send_json(payload)
 
-        while True:
+    async def send_bytes_safe(payload: bytes) -> None:
+        async with send_lock:
+            await websocket.send_bytes(payload)
+
+    async def receiver_loop() -> None:
+        while not stop_event.is_set():
             message = await websocket.receive()
 
             if message.get("type") == "websocket.disconnect":
+                stop_event.set()
+                frame_ready.set()
                 break
 
             if "text" in message and message["text"] is not None:
                 data = json.loads(message["text"])
 
                 if data.get("type") == "ping":
-                    await websocket.send_json({"type": "pong"})
+                    await send_json_safe({"type": "pong"})
                 elif data.get("type") == "stop":
+                    stop_event.set()
+                    frame_ready.set()
                     break
                 elif data.get("type") == "frame":
-                    await websocket.send_json({
+                    await send_json_safe({
                         "type": "error",
                         "message": "Realtime sessions now require binary JPEG websocket frames",
                     })
+                continue
 
-            elif "bytes" in message and message["bytes"] is not None:
-                result = await worker_pool.process_frame(session_id, message["bytes"])
-                latency = float(result.get("latency_ms", 0.0))
-                frame_count += 1
-                total_latency += latency
-                await websocket.send_bytes(result["frame_data"])
+            payload = message.get("bytes")
+            if payload is None:
+                continue
+
+            while not stop_event.is_set():
+                async with frame_lock:
+                    if len(frame_buffer) < max_inflight_frames:
+                        record_received(metrics, len(payload))
+                        frame_buffer.append((payload, loop.time()))
+                        frame_ready.set()
+                        break
+                    if allow_frame_drop:
+                        record_dropped(metrics)
+                        frame_buffer.pop(0)
+                        record_received(metrics, len(payload))
+                        frame_buffer.append((payload, loop.time()))
+                        frame_ready.set()
+                        break
+
+                await asyncio.sleep(0)
+
+    async def processor_loop() -> None:
+        while True:
+            await frame_ready.wait()
+
+            async with frame_lock:
+                if not frame_buffer:
+                    frame_ready.clear()
+                    payload = None
+                    received_at = None
+                else:
+                    if allow_frame_drop and len(frame_buffer) > 1:
+                        dropped_count = len(frame_buffer) - 1
+                        for _ in range(dropped_count):
+                            record_dropped(metrics)
+                        payload, received_at = frame_buffer[-1]
+                        frame_buffer.clear()
+                    else:
+                        payload, received_at = frame_buffer.pop(0)
+
+                    if frame_buffer:
+                        frame_ready.set()
+                    else:
+                        frame_ready.clear()
+
+            if payload is None:
+                if stop_event.is_set():
+                    break
+                continue
+
+            result = await worker_pool.process_frame(session_id, payload)
+            worker_latency_ms = float(result.get("latency_ms", 0.0))
+            total_latency_ms = (
+                (loop.time() - received_at) * 1000 if received_at is not None else worker_latency_ms
+            )
+
+            record_processed(
+                metrics,
+                output_bytes=len(result["frame_data"]),
+                worker_latency_ms=worker_latency_ms,
+                total_latency_ms=total_latency_ms,
+                stage_metrics=result.get("metrics", {}),
+                worker_id=result.get("worker_id"),
+            )
+            await send_bytes_safe(result["frame_data"])
+
+            if stop_event.is_set():
+                async with frame_lock:
+                    if not frame_buffer:
+                        break
+
+    try:
+        await send_json_safe({
+            "type": "connected",
+            "session_id": session_id,
+            "worker_id": session.get("worker_id"),
+            "config": session["config"],
+        })
+
+        receiver_task = asyncio.create_task(receiver_loop())
+        processor_task = asyncio.create_task(processor_loop())
+
+        await receiver_task
+        stop_event.set()
+        frame_ready.set()
+        await processor_task
 
     except WebSocketDisconnect:
         logger.info(f"Real-time session disconnected: {session_id}")
@@ -222,8 +318,14 @@ async def realtime_processing_websocket(websocket: WebSocket, session_id: str):
         except Exception:
             logger.debug("Could not send error message to closed websocket")
     finally:
+        stop_event.set()
+        frame_ready.set()
+        for task in (receiver_task, processor_task):
+            if task is not None and not task.done():
+                task.cancel()
         session["status"] = "closed"
-        avg_latency = total_latency / frame_count if frame_count > 0 else 0
+        frame_count = int(metrics.get("processed_frames", 0))
+        avg_latency = float(metrics.get("avg_total_latency_ms", 0.0))
         logger.info(
             f"Real-time session ended: {session_id} "
             f"(frames: {frame_count}, avg latency: {avg_latency:.1f}ms)"

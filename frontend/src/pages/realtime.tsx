@@ -9,7 +9,12 @@ import { FiArrowLeft, FiCamera, FiSettings, FiPlay, FiSquare } from 'react-icons
 import { ImageUploader } from '@/components/ImageUploader';
 import { CameraFeed } from '@/components/CameraFeed';
 import { useRealtimeWebSocket } from '@/hooks/useWebSocket';
-import api, { UploadResponse, GenerationMode, RealtimeSession } from '@/services/api';
+import api, {
+  UploadResponse,
+  GenerationMode,
+  RealtimeSession,
+  RealtimeSessionMetrics,
+} from '@/services/api';
 
 const RESOLUTION_PRESETS: Array<{ label: string; value: [number, number] }> = [
   { label: '720p (1280x720)', value: [1280, 720] },
@@ -29,6 +34,7 @@ export default function RealtimePage() {
   const [captureResolution, setCaptureResolution] = useState<[number, number]>([1920, 1080]);
   const [targetFps, setTargetFps] = useState(24);
   const [jpegQuality, setJpegQuality] = useState(92);
+  const [sessionMetrics, setSessionMetrics] = useState<RealtimeSessionMetrics | null>(null);
   const processedFrameRef = useRef<string | null>(null);
 
   const updateProcessedFrame = useCallback((nextFrame: string | null) => {
@@ -45,6 +51,35 @@ export default function RealtimePage() {
       URL.revokeObjectURL(processedFrameRef.current);
     }
   }, []);
+
+  useEffect(() => {
+    if (!session?.session_id || !isActive) {
+      setSessionMetrics(null);
+      return;
+    }
+
+    let isCancelled = false;
+    const loadMetrics = async () => {
+      try {
+        const response = await api.getRealtimeSessionMetrics(session.session_id);
+        if (!isCancelled) {
+          setSessionMetrics(response.metrics);
+        }
+      } catch (error) {
+        if (!isCancelled) {
+          console.error('Failed to load realtime metrics:', error);
+        }
+      }
+    };
+
+    loadMetrics();
+    const intervalId = window.setInterval(loadMetrics, 1000);
+
+    return () => {
+      isCancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [isActive, session?.session_id]);
 
   const { isConnected, fps, latency, sendFrame, canSendFrame } = useRealtimeWebSocket(
     session?.session_id || null,
@@ -167,6 +202,14 @@ export default function RealtimePage() {
                     </span>
                     <span className="text-dark-400">{fps} FPS</span>
                     <span className="text-dark-400">{latency.toFixed(0)}ms</span>
+                    {sessionMetrics && (
+                      <>
+                        <span className="text-dark-400">Dropped {sessionMetrics.dropped_frames}</span>
+                        {typeof sessionMetrics.worker_id === 'number' && (
+                          <span className="text-dark-400">Worker {sessionMetrics.worker_id}</span>
+                        )}
+                      </>
+                    )}
                   </div>
                 )}
               </div>
