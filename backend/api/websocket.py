@@ -287,11 +287,23 @@ async def realtime_processing_websocket(websocket: WebSocket, session_id: str):
             )
             adaptive_event = maybe_apply_adaptive_quality(session)
             if adaptive_event:
-                await send_json_safe({
-                    "type": "adaptive_update",
-                    "message": adaptive_event,
-                    "config": session["config"],
-                })
+                try:
+                    await worker_pool.update_session_config(session_id, session["config"])
+                except Exception as exc:
+                    logger.warning(
+                        f"Failed to sync adaptive config for session {session_id}: {exc}"
+                    )
+                    await send_json_safe({
+                        "type": "adaptive_update_failed",
+                        "message": "Adaptive config change could not be applied to worker",
+                        "error": str(exc),
+                    })
+                else:
+                    await send_json_safe({
+                        "type": "adaptive_update",
+                        "message": adaptive_event,
+                        "config": session["config"],
+                    })
             await send_bytes_safe(result["frame_data"])
 
             if stop_event.is_set():
