@@ -357,12 +357,12 @@ class PromptParser:
         """Get a human-readable description of a generation mode."""
         descriptions = {
             GenerationMode.VACE_POSE_TRANSFER: (
-                "Pose Transfer: Transfers the motion and poses from the input video "
-                "to the reference character while preserving their appearance."
+                "Pose Transfer: Uses the driving video poses to place your reference "
+                "character into the motion path while preserving the scene framing."
             ),
             GenerationMode.VACE_MOTION_TRANSFER: (
-                "Motion Transfer: Applies the motion sequence from a reference video "
-                "to animate your character with the same movements."
+                "Motion Transfer: Builds a stylized motion-driven render from a "
+                "driving video and your reference character."
             ),
             GenerationMode.LIVEPORTRAIT: (
                 "Portrait Animation: Animates a static portrait image using facial "
@@ -373,8 +373,8 @@ class PromptParser:
                 "your reference image in real-time."
             ),
             GenerationMode.WAN_R2V: (
-                "Reference-to-Video: Generates a new video featuring your reference "
-                "character in AI-generated scenes based on your text prompt."
+                "Reference-to-Video: Generates a new video from your reference image "
+                "and prompt, using a configured Wan model when available and a built-in renderer otherwise."
             ),
             GenerationMode.AUTO: (
                 "Auto Mode: Automatically selects the best generation method based "

@@ -3,7 +3,7 @@ Job management service for tracking generation jobs.
 """
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, List, Callable, Any
 from dataclasses import dataclass, field
 import uuid
@@ -28,7 +28,7 @@ class Job:
     status: JobStatus = JobStatus.PENDING
     progress: float = 0.0
     current_step: str = ""
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     result_url: Optional[str] = None
@@ -74,7 +74,7 @@ class Job:
         if self.progress <= 0 or self.started_at is None:
             return None
 
-        elapsed = (datetime.utcnow() - self.started_at).total_seconds()
+        elapsed = (datetime.now(timezone.utc) - self.started_at).total_seconds()
         if self.progress >= 100:
             return 0
 
@@ -187,10 +187,10 @@ class JobManager:
 
             # Update timestamps
             if status == JobStatus.PROCESSING and job.started_at is None:
-                job.started_at = datetime.utcnow()
+                job.started_at = datetime.now(timezone.utc)
 
             if status in [JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED]:
-                job.completed_at = datetime.utcnow()
+                job.completed_at = datetime.now(timezone.utc)
 
         # Notify callbacks
         await self._notify_progress(job)
@@ -229,7 +229,7 @@ class JobManager:
             # Auto-update status based on progress
             if job.status == JobStatus.PENDING:
                 job.status = JobStatus.PROCESSING
-                job.started_at = datetime.utcnow()
+                job.started_at = datetime.now(timezone.utc)
 
         # Notify callbacks
         await self._notify_progress(job)
@@ -263,7 +263,7 @@ class JobManager:
             job.current_step = "Complete"
             job.result_url = result_url
             job.thumbnail_url = thumbnail_url
-            job.completed_at = datetime.utcnow()
+            job.completed_at = datetime.now(timezone.utc)
 
             if metadata:
                 job.metadata.update(metadata)
@@ -298,7 +298,7 @@ class JobManager:
         async with self._lock:
             job.status = JobStatus.FAILED
             job.error = error
-            job.completed_at = datetime.utcnow()
+            job.completed_at = datetime.now(timezone.utc)
 
         # Notify callbacks
         await self._notify_progress(job)
@@ -325,7 +325,7 @@ class JobManager:
         async with self._lock:
             job.cancelled = True
             job.status = JobStatus.CANCELLED
-            job.completed_at = datetime.utcnow()
+            job.completed_at = datetime.now(timezone.utc)
             job.current_step = "Cancelled"
 
         # Notify callbacks
@@ -457,7 +457,7 @@ class JobManager:
         """
         from datetime import timedelta
 
-        cutoff = datetime.utcnow() - timedelta(hours=max_age_hours)
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
         to_remove = []
 
         for job_id, job in self._jobs.items():

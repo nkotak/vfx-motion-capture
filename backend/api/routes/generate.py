@@ -2,7 +2,7 @@
 Video generation endpoints.
 """
 
-from typing import Optional
+from typing import Any
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from loguru import logger
 
@@ -10,7 +10,11 @@ from backend.core.models import (
     GenerateRequest,
     JobResponse,
     GenerationMode,
+    GenerationModeInfo,
+    ParsePromptRequest,
+    ParsePromptResponse,
     QualityPreset,
+    get_generation_mode_rules,
 )
 from backend.core.exceptions import FileNotFoundError, InvalidInputError
 from backend.services.file_manager import get_file_manager
@@ -19,6 +23,55 @@ from backend.services.prompt_parser import get_prompt_parser
 
 
 router = APIRouter()
+
+
+def _apply_auto_parameters(request: GenerateRequest, parsed: Any) -> None:
+    """Apply parsed prompt parameters to typed request fields when unset."""
+    field_defaults = GenerateRequest.model_fields
+    recognized_keys = {
+        "quality",
+        "duration",
+        "fps",
+        "resolution",
+        "strength",
+        "preserve_background",
+    }
+
+    if "quality" in parsed.parameters and request.quality == field_defaults["quality"].default:
+        request.quality = parsed.parameters["quality"]
+    if "duration" in parsed.parameters and request.duration is None:
+        request.duration = parsed.parameters["duration"]
+    if "fps" in parsed.parameters and request.fps == field_defaults["fps"].default:
+        request.fps = parsed.parameters["fps"]
+    if "resolution" in parsed.parameters and request.resolution is None:
+        request.resolution = tuple(parsed.parameters["resolution"])
+    if "strength" in parsed.parameters and request.strength == field_defaults["strength"].default:
+        request.strength = parsed.parameters["strength"]
+    if (
+        "preserve_background" in parsed.parameters
+        and request.preserve_background == field_defaults["preserve_background"].default
+    ):
+        request.preserve_background = parsed.parameters["preserve_background"]
+
+    for key, value in parsed.parameters.items():
+        if key not in recognized_keys and key not in request.extra_params:
+            request.extra_params[key] = value
+
+
+def _validate_mode_inputs(request: GenerateRequest) -> None:
+    """Validate mode-specific input requirements."""
+    rules = get_generation_mode_rules(request.mode)
+    if rules["requires_input_video"] and not request.input_video_id:
+        raise InvalidInputError(
+            f"Mode '{request.mode.value}' requires an input video",
+            field="input_video_id",
+        )
+
+    if request.mode == GenerationMode.WAN_R2V and not request.prompt.strip():
+        raise InvalidInputError(
+            "Prompt is required for reference-to-video generation",
+            field="prompt",
+        )
 
 
 @router.post("/generate", response_model=JobResponse)
@@ -91,14 +144,15 @@ async def generate_video(
     if request.mode == GenerationMode.AUTO:
         parsed = prompt_parser.parse(request.prompt)
         request.mode = parsed.mode
-
-        # Merge parsed parameters
-        if parsed.parameters:
-            for key, value in parsed.parameters.items():
-                if key not in request.extra_params:
-                    request.extra_params[key] = value
+        _apply_auto_parameters(request, parsed)
+        request.extra_params.setdefault("auto_parse_confidence", parsed.confidence)
+        request.extra_params.setdefault("auto_parse_subject", parsed.subject)
+        if parsed.cleaned_prompt:
+            request.extra_params.setdefault("cleaned_prompt", parsed.cleaned_prompt)
 
         logger.debug(f"Auto mode selected: {request.mode} (confidence: {parsed.confidence:.2f})")
+
+    _validate_mode_inputs(request)
 
     # Create job
     job = await job_manager.create_job(request)
@@ -151,12 +205,20 @@ async def list_generation_modes():
 
     modes = []
     for mode in GenerationMode:
-        modes.append({
-            "value": mode.value,
-            "name": mode.name,
-            "description": prompt_parser.get_mode_description(mode),
-            "suggested_prompt": prompt_parser.suggest_prompt(mode),
-        })
+        rules = get_generation_mode_rules(mode)
+        modes.append(
+            GenerationModeInfo(
+                value=mode,
+                name=mode.name,
+                label=rules["label"],
+                description=prompt_parser.get_mode_description(mode),
+                suggested_prompt=prompt_parser.suggest_prompt(mode),
+                requires_input_video=rules["requires_input_video"],
+                supports_input_video=rules["supports_input_video"],
+                supports_prompt=rules["supports_prompt"],
+                experimental=rules["experimental"],
+            ).model_dump()
+        )
 
     return {"modes": modes}
 
@@ -196,22 +258,22 @@ async def list_quality_presets():
     return {"presets": presets}
 
 
-@router.post("/generate/parse-prompt")
-async def parse_prompt(prompt: str):
+@router.post("/generate/parse-prompt", response_model=ParsePromptResponse)
+async def parse_prompt(request: ParsePromptRequest):
     """
     Parse a natural language prompt without starting generation.
 
     Useful for previewing how a prompt will be interpreted.
     """
     prompt_parser = get_prompt_parser()
-    parsed = prompt_parser.parse(prompt)
+    parsed = prompt_parser.parse(request.prompt)
 
-    return {
-        "mode": parsed.mode.value,
-        "action": parsed.action,
-        "subject": parsed.subject,
-        "parameters": parsed.parameters,
-        "confidence": parsed.confidence,
-        "cleaned_prompt": parsed.cleaned_prompt,
-        "mode_description": prompt_parser.get_mode_description(parsed.mode),
-    }
+    return ParsePromptResponse(
+        mode=parsed.mode,
+        action=parsed.action,
+        subject=parsed.subject,
+        parameters=parsed.parameters,
+        confidence=parsed.confidence,
+        cleaned_prompt=parsed.cleaned_prompt,
+        mode_description=prompt_parser.get_mode_description(parsed.mode),
+    )
