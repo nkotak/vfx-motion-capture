@@ -245,6 +245,18 @@ class RealtimeConfig(BaseModel):
         le=4096,
         description="Smallest tile size adaptive mode will use when degrading quality"
     )
+    adaptive_fps_step: int = Field(
+        default=6,
+        ge=1,
+        le=30,
+        description="FPS reduction step used by the adaptive controller"
+    )
+    adaptive_min_target_fps: int = Field(
+        default=15,
+        ge=1,
+        le=60,
+        description="Lower bound for adaptive target FPS"
+    )
 
     @field_validator("input_resolution", "output_resolution", mode="before")
     @classmethod

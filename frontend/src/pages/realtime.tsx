@@ -205,6 +205,8 @@ export default function RealtimePage() {
         adaptive_cooldown_frames: 24,
         adaptive_tile_size: 1024,
         adaptive_min_tile_size: 512,
+        adaptive_fps_step: 6,
+        adaptive_min_target_fps: 15,
       });
 
       setSession(newSession);
@@ -551,6 +553,7 @@ export default function RealtimePage() {
                               <div>Active sessions: {worker.active_sessions}</div>
                               <div>Saturation: {(worker.saturation * 100).toFixed(0)}%</div>
                               <div>Pending: {worker.pending_requests}</div>
+                              <div>Inflight depth: {worker.inflight_queue_depth}</div>
                               <div>Processed: {worker.processed_requests}</div>
                               <div>Input queue: {worker.input_queue_size}</div>
                               <div>Output queue: {worker.output_queue_size}</div>

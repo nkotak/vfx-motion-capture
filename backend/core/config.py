@@ -115,6 +115,8 @@ class Settings(BaseSettings):
     realtime_adaptive_cooldown_frames: int = 24
     realtime_adaptive_tile_size: int = 1024
     realtime_adaptive_min_tile_size: int = 512
+    realtime_adaptive_fps_step: int = 6
+    realtime_adaptive_min_target_fps: int = 15
 
     # Hardware
     device: str = "auto"  # auto, cuda, cpu, mps

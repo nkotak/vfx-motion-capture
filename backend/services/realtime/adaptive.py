@@ -84,6 +84,13 @@ def _degrade_config(config: Dict[str, Any], requested_config: Dict[str, Any]) ->
                 config["tile_size"] = next_tile_size
                 return f"Reduced tile size to {next_tile_size}px"
 
+    fps_step = int(config.get("adaptive_fps_step") or 6)
+    min_target_fps = int(config.get("adaptive_min_target_fps") or 15)
+    current_target_fps = int(config.get("target_fps", requested_config.get("target_fps", 24)))
+    if current_target_fps > min_target_fps:
+        config["target_fps"] = max(min_target_fps, current_target_fps - fps_step)
+        return f"Reduced target FPS to {config['target_fps']}"
+
     if config.get("full_frame_inference", True):
         config["full_frame_inference"] = False
         return "Disabled full-frame inference fallback"
@@ -98,6 +105,13 @@ def _recover_config(config: Dict[str, Any], requested_config: Dict[str, Any]) ->
     if current_quality < requested_quality:
         config["jpeg_quality"] = min(requested_quality, current_quality + jpeg_step)
         return f"Raised JPEG quality to {config['jpeg_quality']}"
+
+    requested_target_fps = int(requested_config.get("target_fps", config.get("target_fps", 24)))
+    fps_step = int(config.get("adaptive_fps_step") or 6)
+    current_target_fps = int(config.get("target_fps", requested_target_fps))
+    if current_target_fps < requested_target_fps:
+        config["target_fps"] = min(requested_target_fps, current_target_fps + fps_step)
+        return f"Raised target FPS to {config['target_fps']}"
 
     mode = GenerationMode(config["mode"])
     requested_tile_size = int(requested_config.get("tile_size") or 0)

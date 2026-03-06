@@ -502,10 +502,11 @@ class RealtimeWorkerPool:
                 stats["process_alive"] = worker.process.is_alive()
                 stats["input_queue_size"] = _safe_qsize(worker.input_queue)
                 stats["output_queue_size"] = _safe_qsize(worker.output_queue)
+                stats["inflight_queue_depth"] = max(0, int(stats.get("pending_requests", 0)))
                 queue_capacity = max(1, settings.realtime_buffer_size * 2)
                 stats["saturation"] = min(
                     1.0,
-                    float(stats.get("pending_requests", 0)) / float(queue_capacity),
+                    float(stats.get("inflight_queue_depth", 0)) / float(queue_capacity),
                 )
                 snapshots.append(stats)
             return sorted(snapshots, key=lambda item: item["worker_id"])

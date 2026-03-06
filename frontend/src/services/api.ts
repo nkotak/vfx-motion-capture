@@ -101,6 +101,8 @@ export interface RealtimeConfig {
   adaptive_cooldown_frames?: number;
   adaptive_tile_size?: number | null;
   adaptive_min_tile_size?: number;
+  adaptive_fps_step?: number;
+  adaptive_min_target_fps?: number;
 }
 
 export interface RealtimeSession {
@@ -169,6 +171,7 @@ export interface RealtimeSessionMetricsResponse {
 export interface RealtimeWorkerTelemetry {
   worker_id: number;
   pending_requests: number;
+  inflight_queue_depth: number;
   processed_requests: number;
   error_count: number;
   avg_latency_ms: number;

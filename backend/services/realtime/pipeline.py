@@ -13,7 +13,7 @@ from loguru import logger
 
 from backend.core.models import GenerationMode
 from backend.services.realtime.jpeg_codec import get_jpeg_codec
-from backend.services.realtime.tiled_inference import process_frame_tiled
+from backend.services.realtime.tiled_inference import _axis_weights, _positions
 
 
 def _determine_liveportrait_tile_size(config: Dict[str, Any], frame_rgb: np.ndarray) -> int:
@@ -29,6 +29,59 @@ def _determine_liveportrait_tile_size(config: Dict[str, Any], frame_rgb: np.ndar
     if max(height, width) >= 2560:
         return int(config.get("adaptive_tile_size") or 1024)
     return 0
+
+
+async def _resolve_liveportrait_result(
+    processor: Dict[str, Any],
+    frame_rgb: np.ndarray,
+    config: Dict[str, Any],
+) -> np.ndarray:
+    """Run the liveportrait frame processor and await it if needed."""
+    result = processor["model"].process_frame(
+        processor["reference_image"],
+        frame_rgb,
+        config,
+    )
+    if hasattr(result, "__await__"):
+        return await result
+    return result
+
+
+async def _process_liveportrait_tiled(
+    processor: Dict[str, Any],
+    frame_rgb: np.ndarray,
+    config: Dict[str, Any],
+    *,
+    tile_size: int,
+    tile_overlap: int,
+) -> np.ndarray:
+    """Apply liveportrait to a frame tile-by-tile and blend the result."""
+    height, width = frame_rgb.shape[:2]
+    if tile_size <= 0 or max(height, width) <= tile_size:
+        return await _resolve_liveportrait_result(processor, frame_rgb, config)
+
+    ys = _positions(height, tile_size, tile_overlap)
+    xs = _positions(width, tile_size, tile_overlap)
+    accum = np.zeros((height, width, 3), dtype=np.float32)
+    weight_map = np.zeros((height, width, 1), dtype=np.float32)
+
+    for y in ys:
+        for x in xs:
+            y2 = min(height, y + tile_size)
+            x2 = min(width, x + tile_size)
+            tile = frame_rgb[y:y2, x:x2]
+            processed_tile = await _resolve_liveportrait_result(processor, tile, config)
+            if processed_tile.shape != tile.shape:
+                raise ValueError("LivePortrait tiled processing must preserve tile dimensions")
+
+            y_weights = _axis_weights(y2 - y, tile_overlap, y == 0, y2 == height)
+            x_weights = _axis_weights(x2 - x, tile_overlap, x == 0, x2 == width)
+            blend = np.outer(y_weights, x_weights)[..., None]
+
+            accum[y:y2, x:x2] += processed_tile.astype(np.float32) * blend
+            weight_map[y:y2, x:x2] += blend
+
+    return (accum / np.clip(weight_map, 1e-6, None)).astype(frame_rgb.dtype)
 
 
 async def initialize_realtime_processor(session: Dict[str, Any]) -> Dict[str, Any]:
@@ -93,21 +146,18 @@ async def process_frame(
             if processor.get("model"):
                 tile_size = _determine_liveportrait_tile_size(config, frame_rgb)
                 if tile_size > 0:
-                    result, tile_count = process_frame_tiled(
+                    result = await _process_liveportrait_tiled(
+                        processor,
                         frame_rgb,
+                        config,
                         tile_size=tile_size,
                         tile_overlap=int(config.get("tile_overlap", 64)),
-                        processor=lambda tile: processor["model"].process_frame(
-                            processor["reference_image"],
-                            tile,
-                            config,
-                        ),
                     )
-                    stage_metrics["tile_count"] = tile_count
+                    stage_metrics["tile_count"] = len(_positions(frame_rgb.shape[0], tile_size, int(config.get("tile_overlap", 64)))) * len(_positions(frame_rgb.shape[1], tile_size, int(config.get("tile_overlap", 64))))
                     stage_metrics["processing_mode"] = "liveportrait_tiled"
                 else:
-                    result = processor["model"].process_frame(
-                        processor["reference_image"],
+                    result = await _resolve_liveportrait_result(
+                        processor,
                         frame_rgb,
                         config,
                     )

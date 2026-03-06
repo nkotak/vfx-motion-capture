@@ -101,6 +101,12 @@ async def create_realtime_session(config: RealtimeConfig):
                 if "adaptive_min_tile_size" in fields_set
                 else settings.realtime_adaptive_min_tile_size
             ),
+            "adaptive_fps_step": config.adaptive_fps_step if "adaptive_fps_step" in fields_set else settings.realtime_adaptive_fps_step,
+            "adaptive_min_target_fps": (
+                config.adaptive_min_target_fps
+                if "adaptive_min_target_fps" in fields_set
+                else settings.realtime_adaptive_min_target_fps
+            ),
         }
     )
 
