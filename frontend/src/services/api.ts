@@ -84,6 +84,16 @@ export interface RealtimeConfig {
   face_only: boolean;
   smoothing: number;
   enhance_face: boolean;
+  input_resolution: [number, number];
+  output_resolution: [number, number];
+  jpeg_quality: number;
+  jpeg_subsampling: '444' | '422' | '420' | 'gray';
+  binary_transport: boolean;
+  full_frame_inference: boolean;
+  tile_size?: number | null;
+  tile_overlap: number;
+  max_inflight_frames: number;
+  allow_frame_drop: boolean;
 }
 
 export interface RealtimeSession {
@@ -91,6 +101,7 @@ export interface RealtimeSession {
   websocket_url: string;
   config: RealtimeConfig;
   status: string;
+  worker_id?: number;
 }
 
 class ApiClient {
@@ -298,6 +309,7 @@ class ApiClient {
     gpu_memory_gb?: number;
     capability: string;
     estimated_fps: number;
+    runtime?: 'cpu' | 'cuda' | 'mps';
     recommended_mode?: GenerationMode;
   }> {
     return this.request('/realtime/check-compatibility');

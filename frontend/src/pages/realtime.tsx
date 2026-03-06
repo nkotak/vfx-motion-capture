@@ -11,6 +11,14 @@ import { CameraFeed } from '@/components/CameraFeed';
 import { useRealtimeWebSocket } from '@/hooks/useWebSocket';
 import api, { UploadResponse, GenerationMode, RealtimeSession } from '@/services/api';
 
+const RESOLUTION_PRESETS: Array<{ label: string; value: [number, number] }> = [
+  { label: '720p (1280x720)', value: [1280, 720] },
+  { label: '1080p (1920x1080)', value: [1920, 1080] },
+  { label: '4K UHD (3840x2160)', value: [3840, 2160] },
+];
+
+const FPS_PRESETS = [24, 30, 60];
+
 export default function RealtimePage() {
   const [referenceImage, setReferenceImage] = useState<UploadResponse | null>(null);
   const [session, setSession] = useState<RealtimeSession | null>(null);
@@ -18,6 +26,9 @@ export default function RealtimePage() {
   const [mode, setMode] = useState<'liveportrait' | 'deep_live_cam'>('liveportrait');
   const [processedFrame, setProcessedFrame] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [captureResolution, setCaptureResolution] = useState<[number, number]>([1920, 1080]);
+  const [targetFps, setTargetFps] = useState(24);
+  const [jpegQuality, setJpegQuality] = useState(92);
   const processedFrameRef = useRef<string | null>(null);
 
   const updateProcessedFrame = useCallback((nextFrame: string | null) => {
@@ -69,10 +80,20 @@ export default function RealtimePage() {
       const newSession = await api.createRealtimeSession({
         reference_image_id: referenceImage.id,
         mode,
-        target_fps: 30,
+        target_fps: targetFps,
         face_only: mode === 'liveportrait',
         smoothing: 0.5,
         enhance_face: true,
+        input_resolution: captureResolution,
+        output_resolution: captureResolution,
+        jpeg_quality: jpegQuality,
+        jpeg_subsampling: '420',
+        binary_transport: true,
+        full_frame_inference: true,
+        tile_size: null,
+        tile_overlap: 64,
+        max_inflight_frames: 1,
+        allow_frame_drop: true,
       });
 
       setSession(newSession);
@@ -107,6 +128,8 @@ export default function RealtimePage() {
     },
     [isConnected, sendFrame]
   );
+
+  const selectedResolution = `${captureResolution[0]}x${captureResolution[1]}`;
 
   return (
     <>
@@ -210,6 +233,72 @@ export default function RealtimePage() {
                 </div>
               </div>
 
+              <div className="card p-6 space-y-4">
+                <h3 className="font-medium flex items-center gap-2">
+                  <FiSettings className="w-4 h-4" />
+                  Realtime pipeline
+                </h3>
+
+                <div className="space-y-3">
+                  <label className="block text-sm">
+                    <span className="mb-1 block text-dark-300">Capture + output resolution</span>
+                    <select
+                      value={selectedResolution}
+                      onChange={(e) => {
+                        const [width, height] = e.target.value.split('x').map(Number);
+                        setCaptureResolution([width, height]);
+                      }}
+                      disabled={isActive}
+                      className="select w-full"
+                    >
+                      {RESOLUTION_PRESETS.map((preset) => (
+                        <option
+                          key={`${preset.value[0]}x${preset.value[1]}`}
+                          value={`${preset.value[0]}x${preset.value[1]}`}
+                        >
+                          {preset.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="block text-sm">
+                    <span className="mb-1 block text-dark-300">Target FPS</span>
+                    <select
+                      value={targetFps}
+                      onChange={(e) => setTargetFps(Number(e.target.value))}
+                      disabled={isActive}
+                      className="select w-full"
+                    >
+                      {FPS_PRESETS.map((fpsOption) => (
+                        <option key={fpsOption} value={fpsOption}>
+                          {fpsOption} FPS
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="block text-sm">
+                    <span className="mb-1 block text-dark-300">JPEG quality ({jpegQuality})</span>
+                    <input
+                      type="range"
+                      min={80}
+                      max={100}
+                      step={1}
+                      value={jpegQuality}
+                      onChange={(e) => setJpegQuality(Number(e.target.value))}
+                      disabled={isActive}
+                      className="w-full"
+                    />
+                  </label>
+
+                  <p className="text-xs text-dark-400">
+                    Sessions use binary JPEG transport, full-frame inference, and keep the output
+                    resolution matched to the requested camera resolution.
+                  </p>
+                </div>
+              </div>
+
               {/* Controls */}
               <div className="card p-6">
                 {!isActive ? (
@@ -244,7 +333,9 @@ export default function RealtimePage() {
                   processedFrame={processedFrame || undefined}
                   isActive={isActive}
                   onToggle={isActive ? handleStop : handleStart}
-                  targetFps={session?.config.target_fps ?? 30}
+                  captureResolution={session?.config.input_resolution ?? captureResolution}
+                  jpegQuality={session?.config.jpeg_quality ?? jpegQuality}
+                  targetFps={session?.config.target_fps ?? targetFps}
                   fps={fps}
                   latency={latency}
                 />

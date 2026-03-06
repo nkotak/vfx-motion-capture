@@ -53,7 +53,12 @@ class LivePortraitService:
         # For now, just a pass-through
         return driving_video_path
 
-    def process_frame(self, source_img: np.ndarray, driving_frame: np.ndarray) -> np.ndarray:
+    def process_frame(
+        self,
+        source_img: np.ndarray,
+        driving_frame: np.ndarray,
+        realtime_config: Optional[dict] = None,
+    ) -> np.ndarray:
         """
         Animate source image using a single driving frame.
         """

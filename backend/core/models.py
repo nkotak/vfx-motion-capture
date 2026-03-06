@@ -157,6 +157,73 @@ class RealtimeConfig(BaseModel):
         default=True,
         description="Apply face enhancement"
     )
+    input_resolution: tuple[int, int] = Field(
+        default=(1920, 1080),
+        description="Target camera capture resolution (width, height)"
+    )
+    output_resolution: tuple[int, int] = Field(
+        default=(1920, 1080),
+        description="Target processed frame resolution (width, height)"
+    )
+    jpeg_quality: int = Field(
+        default=90,
+        ge=50,
+        le=100,
+        description="JPEG quality used for realtime transport"
+    )
+    jpeg_subsampling: str = Field(
+        default="420",
+        description="JPEG chroma subsampling mode (444, 422, 420, gray)"
+    )
+    binary_transport: bool = Field(
+        default=True,
+        description="Use binary websocket frames instead of base64 JSON"
+    )
+    full_frame_inference: bool = Field(
+        default=True,
+        description="Keep the full frame at the requested output resolution during processing"
+    )
+    tile_size: Optional[int] = Field(
+        default=None,
+        ge=0,
+        le=4096,
+        description="Optional tile size for future full-frame tiled inference"
+    )
+    tile_overlap: int = Field(
+        default=64,
+        ge=0,
+        le=512,
+        description="Tile overlap in pixels for future tiled inference"
+    )
+    max_inflight_frames: int = Field(
+        default=1,
+        ge=1,
+        le=4,
+        description="Maximum number of inflight realtime frames per session"
+    )
+    allow_frame_drop: bool = Field(
+        default=True,
+        description="Drop stale frames when the realtime pipeline falls behind"
+    )
+
+    @field_validator("input_resolution", "output_resolution", mode="before")
+    @classmethod
+    def parse_realtime_resolution(cls, v):
+        if isinstance(v, (list, tuple)) and len(v) == 2:
+            return tuple(v)
+        if isinstance(v, str):
+            parts = v.lower().replace("x", ",").split(",")
+            if len(parts) == 2:
+                return (int(parts[0]), int(parts[1]))
+        raise ValueError("Resolution must be (width, height) tuple")
+
+    @field_validator("jpeg_subsampling")
+    @classmethod
+    def validate_jpeg_subsampling(cls, v):
+        normalized = v.lower()
+        if normalized not in {"444", "422", "420", "gray"}:
+            raise ValueError("jpeg_subsampling must be one of: 444, 422, 420, gray")
+        return normalized
 
 
 class UploadResponse(BaseModel):

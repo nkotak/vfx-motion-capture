@@ -135,7 +135,12 @@ class FaceSwapper:
             aligned_face=face.aligned_face,
         )
 
-    async def swap_face(self, source_img: np.ndarray, target_img: np.ndarray) -> np.ndarray:
+    async def swap_face(
+        self,
+        source_img: np.ndarray,
+        target_img: np.ndarray,
+        realtime_config: dict | None = None,
+    ) -> np.ndarray:
         """
         Swap face from source_img into target_img.
         """
@@ -148,8 +153,12 @@ class FaceSwapper:
             logger.warning(f"Could not find source face: {e}")
             return target_img
 
-        # 2. Detect the primary target face only, using a smaller working image for speed.
-        detection_image, detection_scale = self._resize_for_realtime_detection(target_img)
+        # 2. Detect the primary target face.
+        use_full_frame_detection = bool(realtime_config and realtime_config.get("full_frame_inference"))
+        if use_full_frame_detection:
+            detection_image, detection_scale = target_img, 1.0
+        else:
+            detection_image, detection_scale = self._resize_for_realtime_detection(target_img)
         target_faces = await self.face_detector.detect_faces(
             detection_image,
             max_faces=1,

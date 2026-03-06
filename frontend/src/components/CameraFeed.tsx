@@ -15,6 +15,8 @@ interface CameraFeedProps {
   processedFrame?: string;
   isActive?: boolean;
   onToggle?: () => void;
+  captureResolution?: [number, number];
+  jpegQuality?: number;
   targetFps?: number;
   fps?: number;
   latency?: number;
@@ -27,6 +29,8 @@ export function CameraFeed({
   processedFrame,
   isActive = false,
   onToggle,
+  captureResolution = [1920, 1080],
+  jpegQuality = 90,
   targetFps = 30,
   fps = 0,
   latency = 0,
@@ -118,8 +122,8 @@ export function CameraFeed({
       if (isActive) {
         animationRef.current = requestAnimationFrame(captureFrame);
       }
-    }, 'image/jpeg', 0.7);
-  }, [canSendFrame, isActive, onFrame, targetFps]);
+    }, 'image/jpeg', Math.max(0.5, Math.min(jpegQuality, 100)) / 100);
+  }, [canSendFrame, isActive, jpegQuality, onFrame, targetFps]);
 
   // Start camera stream
   const startCamera = useCallback(async () => {
@@ -127,8 +131,9 @@ export function CameraFeed({
       const constraints: MediaStreamConstraints = {
         video: {
           deviceId: selectedDevice ? { exact: selectedDevice } : undefined,
-          width: { ideal: 640 },
-          height: { ideal: 480 },
+          width: { ideal: captureResolution[0] },
+          height: { ideal: captureResolution[1] },
+          frameRate: { ideal: targetFps, max: Math.max(targetFps, 30) },
           facingMode: 'user',
         },
         audio: false,
@@ -155,7 +160,7 @@ export function CameraFeed({
       console.error('Failed to start camera:', error);
       setHasCamera(false);
     }
-  }, [captureFrame, isActive, selectedDevice]);
+  }, [captureFrame, captureResolution, isActive, selectedDevice, targetFps]);
 
   // Handle activation
   useEffect(() => {
