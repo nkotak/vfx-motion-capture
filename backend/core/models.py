@@ -2,7 +2,7 @@
 Pydantic models for request/response schemas and data structures.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Union
@@ -31,6 +31,55 @@ class GenerationMode(str, Enum):
     LIVEPORTRAIT = "liveportrait"
     DEEP_LIVE_CAM = "deep_live_cam"
     AUTO = "auto"  # Let the system decide based on prompt
+
+
+def get_generation_mode_rules(mode: GenerationMode) -> Dict[str, Any]:
+    """Return validation and UI rules for a generation mode."""
+    rules: Dict[GenerationMode, Dict[str, Any]] = {
+        GenerationMode.AUTO: {
+            "label": "Auto",
+            "requires_input_video": False,
+            "supports_input_video": True,
+            "supports_prompt": True,
+            "experimental": False,
+        },
+        GenerationMode.VACE_POSE_TRANSFER: {
+            "label": "Pose Transfer",
+            "requires_input_video": True,
+            "supports_input_video": True,
+            "supports_prompt": True,
+            "experimental": False,
+        },
+        GenerationMode.VACE_MOTION_TRANSFER: {
+            "label": "Motion Transfer",
+            "requires_input_video": True,
+            "supports_input_video": True,
+            "supports_prompt": True,
+            "experimental": False,
+        },
+        GenerationMode.WAN_R2V: {
+            "label": "Reference to Video",
+            "requires_input_video": False,
+            "supports_input_video": False,
+            "supports_prompt": True,
+            "experimental": False,
+        },
+        GenerationMode.LIVEPORTRAIT: {
+            "label": "LivePortrait",
+            "requires_input_video": True,
+            "supports_input_video": True,
+            "supports_prompt": True,
+            "experimental": False,
+        },
+        GenerationMode.DEEP_LIVE_CAM: {
+            "label": "Face Swap",
+            "requires_input_video": True,
+            "supports_input_video": True,
+            "supports_prompt": True,
+            "experimental": False,
+        },
+    }
+    return rules[mode]
 
 
 class QualityPreset(str, Enum):
@@ -124,6 +173,38 @@ class GenerateRequest(BaseModel):
             if len(parts) == 2:
                 return (int(parts[0]), int(parts[1]))
         raise ValueError("Resolution must be (width, height) tuple")
+
+
+class ParsePromptRequest(BaseModel):
+    """Request body for prompt parsing."""
+
+    prompt: str = Field(..., description="Natural language prompt to parse")
+
+
+class ParsePromptResponse(BaseModel):
+    """Structured prompt parsing response."""
+
+    mode: GenerationMode
+    action: str
+    subject: str
+    parameters: Dict[str, Any] = Field(default_factory=dict)
+    confidence: float = Field(ge=0.0, le=1.0)
+    cleaned_prompt: str
+    mode_description: str
+
+
+class GenerationModeInfo(BaseModel):
+    """Public metadata describing one generation mode."""
+
+    value: GenerationMode
+    name: str
+    label: str
+    description: str
+    suggested_prompt: str
+    requires_input_video: bool = False
+    supports_input_video: bool = True
+    supports_prompt: bool = True
+    experimental: bool = False
 
 
 class RealtimeConfig(BaseModel):
@@ -298,7 +379,7 @@ class JobCreate(BaseModel):
 
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     request: GenerateRequest
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class JobProgress(BaseModel):

@@ -16,6 +16,11 @@ from backend.core.config import settings
 from backend.core.models import PoseData
 from backend.core.exceptions import PoseExtractionError, NoPoseDetectedError
 
+try:  # pragma: no cover - optional dependency in tests
+    import torch
+except ImportError:  # pragma: no cover
+    torch = None
+
 
 @dataclass
 class PoseKeypoints:
@@ -84,10 +89,9 @@ class PoseExtractor:
         self.backend = backend.lower()
         self.device = device or settings.device
         if self.device == "auto":
-            import torch
-            if torch.cuda.is_available():
+            if torch is not None and torch.cuda.is_available():
                 self.device = "cuda"
-            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            elif torch is not None and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
                 self.device = "mps"
             else:
                 self.device = "cpu"
