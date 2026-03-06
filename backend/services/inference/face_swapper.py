@@ -9,7 +9,7 @@ import numpy as np
 import insightface
 from loguru import logger
 from backend.core.config import settings
-from backend.services.face_detector import get_face_detector
+from backend.services.face_detector import DetectedFace, get_face_detector
 from backend.services.model_manager import get_model_manager
 
 class FaceSwapper:
@@ -29,6 +29,7 @@ class FaceSwapper:
         # Cache for source face to avoid redundant detection in real-time processing
         self._cached_source_face = None
         self._cached_source_hash = None
+        self._realtime_detection_max_size = 512
         
     def _load_swapper(self):
         """Load the inswapper model via ModelManager."""
@@ -101,6 +102,39 @@ class FaceSwapper:
         self._cached_source_hash = current_hash
         return source_face
 
+    def _resize_for_realtime_detection(self, image: np.ndarray) -> tuple[np.ndarray, float]:
+        """Downscale target frames before detection to keep realtime latency low."""
+        height, width = image.shape[:2]
+        max_dim = max(height, width)
+        if max_dim <= self._realtime_detection_max_size:
+            return image, 1.0
+
+        scale = self._realtime_detection_max_size / float(max_dim)
+        resized = cv2.resize(
+            image,
+            (max(1, int(width * scale)), max(1, int(height * scale))),
+            interpolation=cv2.INTER_AREA,
+        )
+        return resized, scale
+
+    def _restore_detected_face_scale(self, face: DetectedFace, scale: float) -> DetectedFace:
+        """Map face detection results from the resized frame back to the source frame."""
+        if scale == 1.0:
+            return face
+
+        inverse_scale = 1.0 / scale
+        bbox = tuple(float(coord * inverse_scale) for coord in face.bbox)
+        landmarks = face.landmarks.astype(np.float32) * inverse_scale
+        return DetectedFace(
+            bbox=bbox,
+            landmarks=landmarks,
+            confidence=face.confidence,
+            embedding=face.embedding,
+            age=face.age,
+            gender=face.gender,
+            aligned_face=face.aligned_face,
+        )
+
     async def swap_face(self, source_img: np.ndarray, target_img: np.ndarray) -> np.ndarray:
         """
         Swap face from source_img into target_img.
@@ -114,8 +148,13 @@ class FaceSwapper:
             logger.warning(f"Could not find source face: {e}")
             return target_img
 
-        # 2. Detect target faces
-        target_faces = await self.face_detector.detect_faces(target_img)
+        # 2. Detect the primary target face only, using a smaller working image for speed.
+        detection_image, detection_scale = self._resize_for_realtime_detection(target_img)
+        target_faces = await self.face_detector.detect_faces(
+            detection_image,
+            max_faces=1,
+            extract_embedding=False,
+        )
         if not target_faces:
             return target_img
             
@@ -124,7 +163,7 @@ class FaceSwapper:
         
         # In a real app, you might select which target face to swap
         # For now, swap the largest one (primary)
-        target_face = target_faces[0]
+        target_face = self._restore_detected_face_scale(target_faces[0], detection_scale)
         
         # InsightFace's swapper expects raw face objects, but our detector wraps them.
         # However, the swapper mainly needs the kps (landmarks) and the source embedding.

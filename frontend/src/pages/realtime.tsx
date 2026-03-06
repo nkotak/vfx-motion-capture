@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import { toast } from 'react-hot-toast';
@@ -18,12 +18,28 @@ export default function RealtimePage() {
   const [mode, setMode] = useState<'liveportrait' | 'deep_live_cam'>('liveportrait');
   const [processedFrame, setProcessedFrame] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const processedFrameRef = useRef<string | null>(null);
 
-  const { isConnected, fps, latency, sendFrame } = useRealtimeWebSocket(
+  const updateProcessedFrame = useCallback((nextFrame: string | null) => {
+    if (processedFrameRef.current?.startsWith('blob:')) {
+      URL.revokeObjectURL(processedFrameRef.current);
+    }
+
+    processedFrameRef.current = nextFrame;
+    setProcessedFrame(nextFrame);
+  }, []);
+
+  useEffect(() => () => {
+    if (processedFrameRef.current?.startsWith('blob:')) {
+      URL.revokeObjectURL(processedFrameRef.current);
+    }
+  }, []);
+
+  const { isConnected, fps, latency, sendFrame, canSendFrame } = useRealtimeWebSocket(
     session?.session_id || null,
     {
-      onFrame: (frameData, frameLatency) => {
-        setProcessedFrame(frameData);
+      onFrame: (frameUrl) => {
+        updateProcessedFrame(frameUrl);
       },
       onError: (error) => {
         toast.error(error);
@@ -79,14 +95,15 @@ export default function RealtimePage() {
     }
 
     setSession(null);
-    setProcessedFrame(null);
+    updateProcessedFrame(null);
   };
 
   const handleFrame = useCallback(
-    (frameData: string) => {
+    (frameData: Blob) => {
       if (isConnected) {
-        sendFrame(frameData);
+        return sendFrame(frameData);
       }
+      return false;
     },
     [isConnected, sendFrame]
   );
@@ -223,9 +240,11 @@ export default function RealtimePage() {
 
                 <CameraFeed
                   onFrame={handleFrame}
+                  canSendFrame={canSendFrame}
                   processedFrame={processedFrame || undefined}
                   isActive={isActive}
                   onToggle={isActive ? handleStop : handleStart}
+                  targetFps={session?.config.target_fps ?? 30}
                   fps={fps}
                   latency={latency}
                 />

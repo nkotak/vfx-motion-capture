@@ -349,7 +349,8 @@ async def process_frame(
 
     # Encode result
     result_bgr = cv2.cvtColor(result, cv2.COLOR_RGB2BGR)
-    _, encoded = cv2.imencode(".jpg", result_bgr, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    # Realtime output favors lower latency over archival quality.
+    _, encoded = cv2.imencode(".jpg", result_bgr, [cv2.IMWRITE_JPEG_QUALITY, 75])
 
     return encoded.tobytes()
 
