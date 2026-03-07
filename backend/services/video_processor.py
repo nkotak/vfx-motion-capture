@@ -10,7 +10,6 @@ import tempfile
 from pathlib import Path
 from typing import Optional, List, Tuple, AsyncIterator
 from dataclasses import dataclass
-import ffmpeg
 import cv2
 import numpy as np
 from PIL import Image
@@ -19,6 +18,11 @@ from loguru import logger
 from backend.core.config import settings
 from backend.core.models import VideoMetadata
 from backend.core.exceptions import VideoProcessingError, InvalidVideoError
+
+try:  # pragma: no cover - optional dependency in some test environments
+    import ffmpeg
+except ImportError:  # pragma: no cover - handled with OpenCV fallbacks
+    ffmpeg = None
 
 
 @dataclass
@@ -62,6 +66,8 @@ class VideoProcessor:
             raise InvalidVideoError(f"Video file not found: {video_path}")
 
         try:
+            if ffmpeg is None:
+                return await self._get_metadata_opencv(video_path)
             probe = await asyncio.to_thread(
                 ffmpeg.probe, str(video_path)
             )
@@ -112,9 +118,37 @@ class VideoProcessor:
             )
 
         except ffmpeg.Error as e:
-            raise InvalidVideoError(f"Failed to probe video: {e.stderr.decode() if e.stderr else str(e)}")
+            logger.warning(f"ffprobe failed for {video_path}, falling back to OpenCV metadata: {e}")
+            return await self._get_metadata_opencv(video_path)
         except Exception as e:
-            raise VideoProcessingError(f"Failed to get video metadata: {str(e)}")
+            logger.warning(f"Primary metadata probe failed for {video_path}, falling back to OpenCV: {e}")
+            return await self._get_metadata_opencv(video_path)
+
+    async def _get_metadata_opencv(self, video_path: Path) -> VideoMetadata:
+        """Fallback metadata extraction using OpenCV only."""
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
+            raise InvalidVideoError(f"Could not open video: {video_path}")
+        try:
+            fps = cap.get(cv2.CAP_PROP_FPS) or float(settings.default_fps)
+            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+            duration = frame_count / fps if fps and frame_count else 0.0
+            return VideoMetadata(
+                path=video_path,
+                duration=duration,
+                fps=fps,
+                frame_count=frame_count,
+                width=width,
+                height=height,
+                codec="opencv",
+                has_audio=False,
+                audio_codec=None,
+                file_size_bytes=video_path.stat().st_size,
+            )
+        finally:
+            cap.release()
 
     async def extract_frames(
         self,
@@ -469,27 +503,38 @@ class VideoProcessor:
         if output_path is None:
             output_path = self.temp_dir / f"{video_path.stem}_thumb.jpg"
 
+        if ffmpeg is not None:
+            try:
+                stream = (
+                    ffmpeg
+                    .input(str(video_path), ss=timestamp)
+                    .filter("scale", size[0], size[1])
+                    .output(str(output_path), vframes=1)
+                )
+                await asyncio.to_thread(
+                    lambda: stream.overwrite_output().run(capture_stdout=True, capture_stderr=True)
+                )
+                return output_path
+            except ffmpeg.Error:
+                logger.warning(f"ffmpeg thumbnail generation failed for {video_path}, falling back to OpenCV")
+
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
+            raise VideoProcessingError(f"Could not open video for thumbnail generation: {video_path}")
         try:
-            stream = (
-                ffmpeg
-                .input(str(video_path), ss=timestamp)
-                .filter("scale", size[0], size[1])
-                .output(str(output_path), vframes=1)
-            )
-            await asyncio.to_thread(
-                lambda: stream.overwrite_output().run(capture_stdout=True, capture_stderr=True)
-            )
-        except ffmpeg.Error as e:
-            # Try at the beginning if timestamp fails
-            stream = (
-                ffmpeg
-                .input(str(video_path))
-                .filter("scale", size[0], size[1])
-                .output(str(output_path), vframes=1)
-            )
-            await asyncio.to_thread(
-                lambda: stream.overwrite_output().run(capture_stdout=True, capture_stderr=True)
-            )
+            fps = cap.get(cv2.CAP_PROP_FPS) or float(settings.default_fps)
+            target_index = max(0, int(timestamp * fps))
+            cap.set(cv2.CAP_PROP_POS_FRAMES, target_index)
+            ok, frame = cap.read()
+            if not ok:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                ok, frame = cap.read()
+            if not ok:
+                raise VideoProcessingError(f"Could not read a frame from {video_path}")
+            resized = cv2.resize(frame, size, interpolation=cv2.INTER_AREA)
+            cv2.imwrite(str(output_path), resized)
+        finally:
+            cap.release()
 
         return output_path
 
@@ -512,6 +557,9 @@ class VideoProcessor:
         Returns:
             Path to converted video
         """
+        if ffmpeg is None:
+            raise VideoProcessingError("Video format conversion requires ffmpeg-python to be installed")
+
         # Determine codec from extension
         ext = output_path.suffix.lower()
         if codec is None:

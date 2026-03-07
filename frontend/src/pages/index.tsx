@@ -15,6 +15,7 @@ import { SettingsPanel } from '@/components/SettingsPanel';
 
 import { useGenerationStore } from '@/hooks/useVideoGeneration';
 import { useJobWebSocket } from '@/hooks/useWebSocket';
+import { getFallbackModeInfo } from '@/services/api';
 
 export default function Home() {
   const {
@@ -45,6 +46,17 @@ export default function Home() {
     updateProgress,
     clearJob,
   } = useGenerationStore();
+  const modeInfo = getFallbackModeInfo(mode);
+  const inputVideoLabel = modeInfo.requires_input_video
+    ? 'Driving Video'
+    : modeInfo.supports_input_video
+      ? 'Motion Video (Optional)'
+      : 'Input Video (Unused in this mode)';
+  const inputVideoDescription = modeInfo.requires_input_video
+    ? 'Required video that provides the motion or expressions for this mode'
+    : modeInfo.supports_input_video
+      ? 'Optional source video for motion- or expression-driven modes'
+      : 'This mode uses only the reference image and prompt';
 
   // WebSocket for job progress
   useJobWebSocket(currentJob?.id || null, {
@@ -71,10 +83,19 @@ export default function Home() {
       toast.error('Please upload a reference image');
       return;
     }
+    if (modeInfo.requires_input_video && !inputVideo) {
+      toast.error(`${modeInfo.label} requires an input video`);
+      return;
+    }
     await startGeneration();
   };
 
   const hasResult = currentJob?.status === 'completed' && currentJob?.result_url;
+  const metadataDuration = typeof currentJob?.metadata?.duration === 'number' ? currentJob.metadata.duration : null;
+  const metadataResolution = Array.isArray(currentJob?.metadata?.resolution)
+    ? currentJob.metadata.resolution as number[]
+    : null;
+  const metadataMode = typeof currentJob?.metadata?.mode === 'string' ? currentJob.metadata.mode : null;
 
   return (
     <>
@@ -138,8 +159,8 @@ export default function Home() {
                     value={inputVideo}
                     onChange={uploadInputVideo}
                     onClear={() => setInputVideo(null)}
-                    label="Motion Video (Optional)"
-                    description="Video with motion/poses to transfer"
+                    label={inputVideoLabel}
+                    description={inputVideoDescription}
                     disabled={isGenerating}
                   />
                 </div>
@@ -161,7 +182,7 @@ export default function Home() {
                 <GenerateButton
                   onClick={handleGenerate}
                   onCancel={cancelGeneration}
-                  disabled={!referenceImage || isGenerating}
+                  disabled={!referenceImage || isGenerating || (modeInfo.requires_input_video && !inputVideo)}
                   isGenerating={isGenerating}
                   progress={jobProgress?.progress || 0}
                   currentStep={jobProgress?.step}
@@ -189,17 +210,17 @@ export default function Home() {
 
                   {currentJob.metadata && (
                     <div className="mt-4 flex gap-4 text-sm text-dark-400">
-                      {currentJob.metadata.duration && (
-                        <span>Duration: {(currentJob.metadata.duration as number).toFixed(1)}s</span>
+                      {metadataDuration !== null && (
+                        <span>Duration: {metadataDuration.toFixed(1)}s</span>
                       )}
-                      {currentJob.metadata.resolution && (
+                      {metadataResolution && (
                         <span>
-                          Resolution: {(currentJob.metadata.resolution as number[])[0]}x
-                          {(currentJob.metadata.resolution as number[])[1]}
+                          Resolution: {metadataResolution[0]}x
+                          {metadataResolution[1]}
                         </span>
                       )}
-                      {currentJob.metadata.mode && (
-                        <span>Mode: {(currentJob.metadata.mode as string).replace(/_/g, ' ')}</span>
+                      {metadataMode && (
+                        <span>Mode: {metadataMode.replace(/_/g, ' ')}</span>
                       )}
                     </div>
                   )}
@@ -228,8 +249,9 @@ export default function Home() {
                 <h3 className="font-medium mb-3">Quick Tips</h3>
                 <ul className="space-y-2 text-sm text-dark-400">
                   <li>Use a clear, front-facing reference image for best results</li>
-                  <li>Input videos with distinct poses work better</li>
+                  <li>Driving videos with distinct poses and motion work better</li>
                   <li>Start with Draft quality to test your prompts</li>
+                  <li>{modeInfo.requires_input_video ? `${modeInfo.label} needs a driving video to run` : `${modeInfo.label} can run from the reference image and prompt alone`}</li>
                   <li>Try different modes if the auto-detected one doesnt work well</li>
                 </ul>
               </div>

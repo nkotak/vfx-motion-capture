@@ -4,15 +4,17 @@ WebSocket handlers for real-time communication.
 
 import asyncio
 import json
-import base64
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from datetime import datetime
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from loguru import logger
 
 from backend.core.models import JobStatus, JobProgress
+from backend.services.realtime.adaptive import maybe_apply_adaptive_quality
 from backend.services.job_manager import get_job_manager
+from backend.services.realtime.metrics import record_dropped, record_processed, record_received
+from backend.services.realtime import get_realtime_worker_pool
 
 
 # Router for WebSocket endpoints
@@ -153,97 +155,177 @@ async def realtime_processing_websocket(websocket: WebSocket, session_id: str):
     """
     WebSocket endpoint for real-time camera processing.
 
-    ## Protocol
+    Optimized path:
+    - client sends binary JPEG frames
+    - worker pool decodes / processes / re-encodes them
+    - server streams binary JPEG frames back
 
-    1. Client sends camera frames as base64-encoded images
-    2. Server processes and returns transformed frames
-    3. Binary frames can also be used for efficiency
-
-    ## Message Format
-
-    Client -> Server:
-    {
-        "type": "frame",
-        "data": "<base64 image data>",
-        "timestamp": 1234567890
-    }
-
-    Server -> Client:
-    {
-        "type": "result",
-        "data": "<base64 transformed image>",
-        "latency_ms": 25,
-        "timestamp": 1234567890
-    }
+    JSON text messages are reserved for control and error handling only.
     """
-    # Verify session exists
     if session_id not in realtime_sessions:
         await websocket.close(code=4004, reason="Session not found")
         return
 
     session = realtime_sessions[session_id]
+    worker_pool = get_realtime_worker_pool()
+    await worker_pool.register_session(session_id, session)
     await websocket.accept()
 
     logger.info(f"Real-time session started: {session_id}")
     session["status"] = "active"
     session["created_at"] = datetime.utcnow()
 
-    # Initialize processor based on mode
-    processor = await initialize_realtime_processor(session)
+    metrics = session.setdefault("metrics", {})
+    allow_frame_drop = bool(session["config"].get("allow_frame_drop", True))
+    max_inflight_frames = max(1, int(session["config"].get("max_inflight_frames", 1)))
+    frame_buffer: list[tuple[bytes, float]] = []
+    frame_lock = asyncio.Lock()
+    frame_ready = asyncio.Event()
+    stop_event = asyncio.Event()
+    send_lock = asyncio.Lock()
+    loop = asyncio.get_running_loop()
+    receiver_task: asyncio.Task | None = None
+    processor_task: asyncio.Task | None = None
 
-    frame_count = 0
-    total_latency = 0
+    async def send_json_safe(payload: Dict[str, Any]) -> None:
+        async with send_lock:
+            await websocket.send_json(payload)
 
-    try:
-        while True:
-            # Receive frame
+    async def send_bytes_safe(payload: bytes) -> None:
+        async with send_lock:
+            await websocket.send_bytes(payload)
+
+    async def receiver_loop() -> None:
+        while not stop_event.is_set():
             message = await websocket.receive()
 
-            if "text" in message:
+            if message.get("type") == "websocket.disconnect":
+                stop_event.set()
+                frame_ready.set()
+                break
+
+            if "text" in message and message["text"] is not None:
                 data = json.loads(message["text"])
 
-                if data.get("type") == "frame":
-                    start_time = asyncio.get_event_loop().time()
-
-                    # Decode frame
-                    frame_data = base64.b64decode(data["data"])
-
-                    # Process frame
-                    result_data = await process_frame(processor, frame_data, session)
-
-                    # Calculate latency
-                    latency = (asyncio.get_event_loop().time() - start_time) * 1000
-
-                    frame_count += 1
-                    total_latency += latency
-
-                    # Send result
-                    await websocket.send_json({
-                        "type": "result",
-                        "data": base64.b64encode(result_data).decode(),
-                        "latency_ms": round(latency, 1),
-                        "frame_number": frame_count,
-                        "timestamp": data.get("timestamp"),
-                    })
-
-                elif data.get("type") == "ping":
-                    await websocket.send_json({"type": "pong"})
-
+                if data.get("type") == "ping":
+                    await send_json_safe({"type": "pong"})
                 elif data.get("type") == "stop":
+                    stop_event.set()
+                    frame_ready.set()
                     break
+                elif data.get("type") == "frame":
+                    await send_json_safe({
+                        "type": "error",
+                        "message": "Realtime sessions now require binary JPEG websocket frames",
+                    })
+                continue
 
-            elif "bytes" in message:
-                # Binary frame for efficiency
-                start_time = asyncio.get_event_loop().time()
+            payload = message.get("bytes")
+            if payload is None:
+                continue
 
-                result_data = await process_frame(processor, message["bytes"], session)
+            while not stop_event.is_set():
+                async with frame_lock:
+                    if len(frame_buffer) < max_inflight_frames:
+                        record_received(metrics, len(payload))
+                        frame_buffer.append((payload, loop.time()))
+                        frame_ready.set()
+                        break
+                    if allow_frame_drop:
+                        record_dropped(metrics)
+                        frame_buffer.pop(0)
+                        record_received(metrics, len(payload))
+                        frame_buffer.append((payload, loop.time()))
+                        frame_ready.set()
+                        break
 
-                latency = (asyncio.get_event_loop().time() - start_time) * 1000
-                frame_count += 1
-                total_latency += latency
+                await asyncio.sleep(0)
 
-                # Send binary result
-                await websocket.send_bytes(result_data)
+    async def processor_loop() -> None:
+        while True:
+            await frame_ready.wait()
+
+            async with frame_lock:
+                if not frame_buffer:
+                    frame_ready.clear()
+                    payload = None
+                    received_at = None
+                else:
+                    if allow_frame_drop and len(frame_buffer) > 1:
+                        dropped_count = len(frame_buffer) - 1
+                        for _ in range(dropped_count):
+                            record_dropped(metrics)
+                        payload, received_at = frame_buffer[-1]
+                        frame_buffer.clear()
+                    else:
+                        payload, received_at = frame_buffer.pop(0)
+
+                    if frame_buffer:
+                        frame_ready.set()
+                    else:
+                        frame_ready.clear()
+
+            if payload is None:
+                if stop_event.is_set():
+                    break
+                continue
+
+            result = await worker_pool.process_frame(session_id, payload)
+            worker_latency_ms = float(result.get("latency_ms", 0.0))
+            total_latency_ms = (
+                (loop.time() - received_at) * 1000 if received_at is not None else worker_latency_ms
+            )
+
+            record_processed(
+                metrics,
+                output_bytes=len(result["frame_data"]),
+                worker_latency_ms=worker_latency_ms,
+                total_latency_ms=total_latency_ms,
+                stage_metrics=result.get("metrics", {}),
+                transport_metrics=result.get("transport_metrics", {}),
+                worker_id=result.get("worker_id"),
+            )
+            adaptive_event = maybe_apply_adaptive_quality(session)
+            if adaptive_event:
+                try:
+                    await worker_pool.update_session_config(session_id, session["config"])
+                except Exception as exc:
+                    logger.warning(
+                        f"Failed to sync adaptive config for session {session_id}: {exc}"
+                    )
+                    await send_json_safe({
+                        "type": "adaptive_update_failed",
+                        "message": "Adaptive config change could not be applied to worker",
+                        "error": str(exc),
+                    })
+                else:
+                    await send_json_safe({
+                        "type": "adaptive_update",
+                        "message": adaptive_event,
+                        "config": session["config"],
+                    })
+            await send_bytes_safe(result["frame_data"])
+
+            if stop_event.is_set():
+                async with frame_lock:
+                    if not frame_buffer:
+                        break
+
+    try:
+        await send_json_safe({
+            "type": "connected",
+            "session_id": session_id,
+            "worker_id": session.get("worker_id"),
+            "config": session["config"],
+        })
+
+        receiver_task = asyncio.create_task(receiver_loop())
+        processor_task = asyncio.create_task(processor_loop())
+
+        await receiver_task
+        stop_event.set()
+        frame_ready.set()
+        await processor_task
 
     except WebSocketDisconnect:
         logger.info(f"Real-time session disconnected: {session_id}")
@@ -257,114 +339,18 @@ async def realtime_processing_websocket(websocket: WebSocket, session_id: str):
         except Exception:
             logger.debug("Could not send error message to closed websocket")
     finally:
-        # Cleanup
+        stop_event.set()
+        frame_ready.set()
+        for task in (receiver_task, processor_task):
+            if task is not None and not task.done():
+                task.cancel()
         session["status"] = "closed"
-        if processor:
-            await cleanup_processor(processor)
-
-        avg_latency = total_latency / frame_count if frame_count > 0 else 0
+        frame_count = int(metrics.get("processed_frames", 0))
+        avg_latency = float(metrics.get("avg_total_latency_ms", 0.0))
         logger.info(
             f"Real-time session ended: {session_id} "
             f"(frames: {frame_count}, avg latency: {avg_latency:.1f}ms)"
         )
-
-
-async def initialize_realtime_processor(session: Dict[str, Any]) -> Any:
-    """Initialize the real-time processor based on session config."""
-    from backend.core.models import GenerationMode
-    import cv2
-    import numpy as np
-    from backend.services.inference.face_swapper import get_face_swapper
-    from backend.services.inference.live_portrait import get_live_portrait_service
-
-    config = session["config"]
-    mode = GenerationMode(config["mode"])
-    reference_path = session["reference_path"]
-
-    # Load reference image
-    reference_image = cv2.imread(reference_path)
-    reference_image = cv2.cvtColor(reference_image, cv2.COLOR_BGR2RGB)
-
-    processor = {
-        "mode": mode,
-        "reference_image": reference_image,
-        "config": config,
-        "model": None,
-    }
-
-    if mode == GenerationMode.LIVEPORTRAIT:
-        logger.info("Initializing LivePortrait processor")
-        processor["model"] = get_live_portrait_service()
-
-    elif mode == GenerationMode.DEEP_LIVE_CAM:
-        logger.info("Initializing face swap processor")
-        face_swapper = get_face_swapper()
-        # Pre-cache the source face for efficient real-time processing
-        await face_swapper.set_source_face(reference_image)
-        processor["model"] = face_swapper
-        
-    return processor
-
-
-async def process_frame(
-    processor: Dict[str, Any],
-    frame_data: bytes,
-    session: Dict[str, Any]
-) -> bytes:
-    """Process a single frame through the real-time pipeline."""
-    import cv2
-    import numpy as np
-    from backend.core.models import GenerationMode
-
-    # Decode frame
-    nparr = np.frombuffer(frame_data, np.uint8)
-    frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-
-    if frame is None:
-        raise ValueError("Failed to decode frame")
-
-    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    mode = processor["mode"]
-    result = frame_rgb  # Default to passthrough
-
-    try:
-        if mode == GenerationMode.LIVEPORTRAIT:
-            if processor.get("model"):
-                # Run synchronous method if fast or wrap in executor
-                result = processor["model"].process_frame(processor["reference_image"], frame_rgb)
-            else:
-                result = frame_rgb
-
-        elif mode == GenerationMode.DEEP_LIVE_CAM:
-            if processor.get("model"):
-                # Swap face - async
-                result = await processor["model"].swap_face(processor["reference_image"], frame_rgb)
-            else:
-                result = frame_rgb
-                
-    except Exception as e:
-        logger.error(f"Frame processing error: {e}")
-        # Return original frame on error
-        result = frame_rgb
-
-    # Encode result
-    result_bgr = cv2.cvtColor(result, cv2.COLOR_RGB2BGR)
-    _, encoded = cv2.imencode(".jpg", result_bgr, [cv2.IMWRITE_JPEG_QUALITY, 85])
-
-    return encoded.tobytes()
-
-
-async def cleanup_processor(processor: Dict[str, Any]) -> None:
-    """Clean up processor resources."""
-    if processor.get("model"):
-        # Clear cached source face to free memory
-        if hasattr(processor["model"], "clear_source_cache"):
-            processor["model"].clear_source_cache()
-        if hasattr(processor["model"], "close"):
-            processor["model"].close()
-
-    if processor.get("face_detector"):
-        processor["face_detector"].close()
 
 
 @websocket_router.websocket("/ws/status")

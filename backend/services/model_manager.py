@@ -4,10 +4,14 @@ Handles loading, unloading, and caching of AI models to manage VRAM/memory effic
 """
 
 import gc
-import torch
-from typing import Dict, Any, Optional, Type
+from typing import Dict, Any, Optional
 from loguru import logger
 from backend.core.config import settings
+
+try:  # pragma: no cover - optional dependency in tests
+    import torch
+except ImportError:  # pragma: no cover - handled at runtime
+    torch = None
 
 class ModelManager:
     """
@@ -77,6 +81,8 @@ class ModelManager:
     def _clean_memory(self):
         """Force garbage collection and clear CUDA/MPS cache."""
         gc.collect()
+        if torch is None:
+            return
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
             torch.cuda.ipc_collect()

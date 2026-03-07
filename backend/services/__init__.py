@@ -1,10 +1,4 @@
-# Services module initialization
-from .video_processor import VideoProcessor
-from .pose_extractor import PoseExtractor
-from .face_detector import FaceDetector
-from .prompt_parser import PromptParser
-from .job_manager import JobManager
-from .file_manager import FileManager
+"""Lazy exports for backend services."""
 
 __all__ = [
     "JobManager",
@@ -14,3 +8,25 @@ __all__ = [
     "FaceDetector",
     "PromptParser",
 ]
+
+
+def __getattr__(name):
+    if name == "VideoProcessor":
+        from .video_processor import VideoProcessor
+        return VideoProcessor
+    if name == "PoseExtractor":
+        from .pose_extractor import PoseExtractor
+        return PoseExtractor
+    if name == "FaceDetector":
+        from .face_detector import FaceDetector
+        return FaceDetector
+    if name == "PromptParser":
+        from .prompt_parser import PromptParser
+        return PromptParser
+    if name == "JobManager":
+        from .job_manager import JobManager
+        return JobManager
+    if name == "FileManager":
+        from .file_manager import FileManager
+        return FileManager
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

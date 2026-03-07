@@ -30,9 +30,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
     # Initialize services
     from backend.services.file_manager import get_file_manager
     from backend.services.job_manager import get_job_manager
+    from backend.services.realtime import get_realtime_worker_pool
 
     file_manager = get_file_manager()
     job_manager = get_job_manager()
+    realtime_worker_pool = get_realtime_worker_pool()
+    await realtime_worker_pool.start()
 
     # Start background cleanup task
     cleanup_task = asyncio.create_task(periodic_cleanup())
@@ -48,6 +51,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
         await cleanup_task
     except asyncio.CancelledError:
         pass
+
+    from backend.services.realtime import get_realtime_worker_pool, reset_realtime_worker_pool
+
+    await get_realtime_worker_pool().shutdown()
+    reset_realtime_worker_pool()
 
     logger.info("Shutdown complete")
 

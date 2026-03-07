@@ -1,8 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { FiZap, FiInfo } from 'react-icons/fi';
-import { GenerationMode } from '@/services/api';
+import { FiZap } from 'react-icons/fi';
+import { FALLBACK_GENERATION_MODES, GenerationMode, GenerationModeInfo, getFallbackModeInfo } from '@/services/api';
 import api from '@/services/api';
 
 interface PromptInputProps {
@@ -31,6 +31,27 @@ export function PromptInput({
   const [parsedMode, setParsedMode] = useState<GenerationMode | null>(null);
   const [confidence, setConfidence] = useState<number>(0);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [modes, setModes] = useState<GenerationModeInfo[]>(FALLBACK_GENERATION_MODES);
+
+  useEffect(() => {
+    let mounted = true;
+    api.getModes()
+      .then((result) => {
+        if (mounted && result.modes.length > 0) {
+          setModes(result.modes);
+        }
+      })
+      .catch(() => {
+        if (mounted) {
+          setModes(FALLBACK_GENERATION_MODES);
+        }
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const parsedModeInfo = parsedMode ? modes.find((entry) => entry.value === parsedMode) ?? getFallbackModeInfo(parsedMode) : null;
 
   // Debounced prompt parsing
   useEffect(() => {
@@ -62,7 +83,7 @@ export function PromptInput({
           <div className="flex items-center gap-1.5 text-xs text-primary-400">
             <FiZap className="w-3 h-3" />
             <span>
-              Will use: {parsedMode.replace(/_/g, ' ')}
+              Will use: {parsedModeInfo?.label ?? parsedMode.replace(/_/g, ' ')}
               {confidence > 0.7 && ' (high confidence)'}
             </span>
           </div>
@@ -101,46 +122,17 @@ export function PromptInput({
 
       {/* Mode selector */}
       <div className="flex flex-wrap gap-2">
-        <ModeButton
-          mode="auto"
-          currentMode={mode}
-          onClick={onModeChange}
-          label="Auto"
-          description="Automatically detect from prompt"
-          disabled={disabled}
-        />
-        <ModeButton
-          mode="vace_pose_transfer"
-          currentMode={mode}
-          onClick={onModeChange}
-          label="Pose Transfer"
-          description="Transfer poses to character"
-          disabled={disabled}
-        />
-        <ModeButton
-          mode="wan_r2v"
-          currentMode={mode}
-          onClick={onModeChange}
-          label="R2V"
-          description="Generate new video"
-          disabled={disabled}
-        />
-        <ModeButton
-          mode="liveportrait"
-          currentMode={mode}
-          onClick={onModeChange}
-          label="LivePortrait"
-          description="Animate portrait"
-          disabled={disabled}
-        />
-        <ModeButton
-          mode="deep_live_cam"
-          currentMode={mode}
-          onClick={onModeChange}
-          label="Face Swap"
-          description="Swap faces"
-          disabled={disabled}
-        />
+        {modes.map((modeInfo) => (
+          <ModeButton
+            key={modeInfo.value}
+            mode={modeInfo.value}
+            currentMode={mode}
+            onClick={onModeChange}
+            label={modeInfo.label}
+            description={modeInfo.description}
+            disabled={disabled}
+          />
+        ))}
       </div>
     </div>
   );
